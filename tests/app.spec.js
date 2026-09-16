@@ -30,11 +30,27 @@ test("app shell loads with fixed player outside scrollable content", async ({ pa
   expect(layout.player.top).toBe(layout.shell.bottom);
   expect(layout.main.bottom).toBe(layout.player.top);
   expect(layout.documentHeight).toBe(layout.viewportHeight);
+
+  const transportOrder = await page.locator(".buttons > button").evaluateAll(buttons => buttons.map(button => button.id));
+  expect(transportOrder.indexOf("queueToggle")).toBeLessThan(transportOrder.indexOf("prevBtn"));
 });
 
 test("discover uses expanded 12-card desktop shelves", async ({ page }) => {
+  await page.route("**/api/home", route => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      sections: [{
+        title: "Quick picks",
+        tracks: Array.from({ length: 12 }, (_, index) => ({
+          id: `discover-${index}`,
+          title: `Discover ${index}`,
+          artist: "Test artist",
+        })),
+      }],
+    }),
+  }));
   await page.goto("/");
-  await page.getByRole("button", { name: "Discover" }).click();
+  await page.getByRole("button", { name: "Discover", exact: true }).click();
   await expect(page.locator("#discoverPanel.panel.active")).toBeVisible();
   await expect(page.locator(".discover-grid").first()).toBeVisible();
 
@@ -133,6 +149,49 @@ test("track context menu exposes mix, play-next, and playlist actions", async ({
   await expect(page.getByRole("button", { name: "Add to playlist" })).toBeVisible();
 });
 
+test("mix seeds queue immediately and falls back to search", async ({ page }) => {
+  const seed = { id: "seed-track", title: "Seed track", artist: "Seed artist", album: "", duration: 180, thumbnail: "" };
+  await page.route("**/api/home", route => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ sections: [{ title: "Quick picks", tracks: [seed], layout: "grid" }] }),
+  }));
+  await page.route("**/api/mix/**", route => route.fulfill({ status: 502, contentType: "application/json", body: "{}" }));
+  await page.route("**/api/search**", route => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ results: [
+      { id: "mix-track-1", title: "Mix one", artist: "Seed artist", album: "", duration: 180, thumbnail: "" },
+      { id: "mix-track-2", title: "Mix two", artist: "Related artist", album: "", duration: 180, thumbnail: "" },
+    ] }),
+  }));
+  await page.route("**/api/resolve/**", route => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ streamUrl: "", fallbackUrl: "" }),
+  }));
+  await page.goto("/");
+  await page.locator("#home").getByRole("button", { name: /Seed track/ }).first().click();
+  await expect(page.locator("#queue .track")).toHaveCount(3);
+  await expect(page.locator("#queueDrawer")).toBeVisible();
+});
+
+test("profile menu shows detected account identity", async ({ page }) => {
+  await page.route("**/api/session", route => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      loggedIn: true,
+      cookieBytes: 42,
+      userId: "12345678901234567890",
+      channelId: "UC12345678901234567890",
+      profileName: "YoLite Listener",
+      profilePicture: "",
+      libraryAuthenticated: true,
+    }),
+  }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Account" }).click();
+  await expect(page.getByText("YoLite Listener")).toBeVisible();
+  await expect(page.getByText("User ID 12345678901234567890")).toBeVisible();
+});
+
 test("Listen again renders three animated 3x3 pages", async ({ page }) => {
   const tracks = Array.from({ length: 27 }, (_, index) => ({
     id: `listen-${index}`,
@@ -163,4 +222,9 @@ test("settings owns session and performance controls", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Performance" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Session" })).toBeVisible();
   await expect(page.locator("#prefetchCount")).toBeVisible();
+  await expect(page.locator("#prefetchCount")).toHaveAttribute("type", "number");
+  await expect(page.locator("#prefetchCount")).toHaveAttribute("max", "50");
+  await expect(page.locator("#volumeNormalization")).toBeVisible();
+  await expect(page.locator("#visualizerEnabled")).toBeChecked();
+  await expect(page.locator('[data-hotkey="playPause"]')).toHaveValue("Ctrl+Alt+Space");
 });

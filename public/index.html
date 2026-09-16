@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
+    <canvas id="visualizer" class="visualizer" aria-hidden="true"></canvas>
     <a class="skip-link" href="#homePanel">Skip to music</a>
     <div id="splash" class="splash" aria-label="Opening Yolite">
       <img src="/logo.png" alt="">
@@ -15,7 +16,10 @@
     </div>
     <div id="shell" class="shell">
       <header class="topbar">
-        <span class="topbar-wordmark">Yolite</span>
+        <div class="topbar-brand" aria-label="YoLite">
+          <img src="/logo.png" alt="">
+          <span>Yo<span>Lite</span></span>
+        </div>
         <div class="search-stack">
           <form id="searchForm" class="searchbar">
             <span class="ico search-ico"></span>
@@ -32,13 +36,21 @@
             <button class="chip" type="button" data-scope="video">Videos</button>
           </div>
         </div>
-        <span class="topbar-hint">your music, lighter</span>
+        <div class="topbar-actions">
+          <button id="remoteButton" class="topbar-button tauri-only" type="button" aria-label="Open phone controller">QR</button>
+          <button id="profileButton" class="profile-button" type="button" aria-label="Account" aria-expanded="false">
+            <img id="profilePicture" alt="">
+            <span id="profileFallback">?</span>
+          </button>
+          <div id="profileMenu" class="profile-menu" hidden>
+            <strong id="profileName">Not signed in</strong>
+            <span id="profileUserId">No YouTube User ID</span>
+            <button id="profileLogin" type="button">Open In-App Login</button>
+            <button id="profileSettings" class="ghost" type="button">Account settings</button>
+          </div>
+        </div>
       </header>
       <aside class="sidebar">
-        <div class="brand">
-          <img class="mark" src="/logo.png" alt="">
-          <span>Yolite</span>
-        </div>
         <button class="nav active" data-panel="homePanel">
           <span class="ico home-ico"></span>
           Home
@@ -120,7 +132,7 @@
               <h2>Performance</h2>
               <label class="setting-row">
                 <span>Prefetch</span>
-                <input id="prefetchCount" type="range" min="0" max="10" step="1" value="5">
+                <input id="prefetchCount" type="number" min="0" max="50" step="1" value="5">
                 <output id="prefetchCountValue">5 tracks</output>
               </label>
               <label class="setting-row">
@@ -151,6 +163,14 @@
                   <option value="auto">Only automatic transitions</option>
                   <option value="always">Every track change</option>
                 </select>
+              </label>
+              <label class="setting-check">
+                <input id="volumeNormalization" type="checkbox">
+                <span>Volume normalization</span>
+              </label>
+              <label class="setting-check">
+                <input id="visualizerEnabled" type="checkbox" checked>
+                <span>Background visualizer</span>
               </label>
             </section>
             <section class="settings-section">
@@ -195,6 +215,28 @@
                 <input class="eq-control" id="eqTreble" data-eq="treble" type="range" min="-12" max="12" step="1" value="0">
                 <output id="eqTrebleValue">0 dB</output>
               </label>
+            </section>
+            <section class="settings-section settings-section-wide">
+              <div class="settings-heading">
+                <h2>Global hotkeys</h2>
+                <button id="resetHotkeys" class="ghost small" type="button">Reset</button>
+              </div>
+              <div class="hotkey-grid">
+                <label><span>Play / pause</span><input data-hotkey="playPause" value="Ctrl+Alt+Space"></label>
+                <label><span>Next song</span><input data-hotkey="next" value="Ctrl+Alt+ArrowRight"></label>
+                <label><span>Previous song</span><input data-hotkey="previous" value="Ctrl+Alt+ArrowLeft"></label>
+                <label><span>Volume up</span><input data-hotkey="volumeUp" value="Ctrl+Alt+ArrowUp"></label>
+                <label><span>Volume down</span><input data-hotkey="volumeDown" value="Ctrl+Alt+ArrowDown"></label>
+              </div>
+              <span id="hotkeyState" class="help-text">Desktop hotkeys work while YoLite is in background.</span>
+            </section>
+            <section class="settings-section settings-section-wide">
+              <div class="settings-heading">
+                <h2>Plugins and themes</h2>
+                <button id="reloadPlugins" class="ghost small" type="button">Reload</button>
+              </div>
+              <div id="pluginList" class="plugin-list"></div>
+              <p class="help-text">Install declarative plugins in <code>~/.config/yolite/plugins</code>. Plugins can add themes and Discover categories.</p>
             </section>
             <section class="settings-section">
               <h2>Recommendations</h2>
@@ -286,11 +328,12 @@
       </div>
       <div class="transport">
         <div class="buttons">
+          <button id="queueToggle" class="round" aria-label="Queue"><span class="queue-lines"></span></button>
           <button id="prevBtn" class="round" aria-label="Previous"><span class="prev-shape"></span></button>
           <button id="playBtn" class="round primary" aria-label="Play"><span id="playShape" class="play-shape"></span></button>
           <button id="nextBtn" class="round" aria-label="Next"><span class="next-shape"></span></button>
           <button id="loopBtn" class="round" aria-label="Loop off" aria-pressed="false"><span class="loop-shape">↻</span></button>
-          <button id="queueToggle" class="round" aria-label="Queue"><span class="queue-lines"></span></button>
+          <button id="miniPlayerButton" class="round tauri-only" aria-label="Toggle mini player"><span class="mini-shape"></span></button>
         </div>
         <div class="timeline">
           <span id="elapsed">0:00</span>
@@ -330,6 +373,18 @@
           <input id="newPlaylistName" type="text" maxlength="80" placeholder="Road trip">
         </label>
         <button id="createPlaylist" value="default">Create playlist</button>
+      </form>
+    </dialog>
+
+    <dialog id="remoteDialog" class="playlist-dialog remote-dialog">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-head">
+          <h2>Phone controller</h2>
+          <button class="ghost small" value="cancel">Close</button>
+        </div>
+        <div id="remoteQr" class="remote-qr"></div>
+        <a id="remoteUrl" class="remote-url" target="_blank" rel="noreferrer"></a>
+        <p class="help-text">Connect phone to same network. Anyone with QR can control playback and download current song.</p>
       </form>
     </dialog>
 

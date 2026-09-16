@@ -12,6 +12,9 @@ A lightweight YouTube Music client that avoids Electron. It can run as a native 
 - Audio playback through `yt-dlp`
 - Desktop loopback stream fallback when direct media URLs fail in the webview
 - Queue, previous/next, progress, seek, volume, and compact responsive UI
+- Global configurable playback hotkeys and compact always-on-top mini player
+- Token-protected phone controller with current-song download over the local network
+- Declarative theme and discovery plugins
 - Linux-first, with a Windows-capable Tauri path
 
 ## Requirements
@@ -77,3 +80,27 @@ Set `YOLITE_CONFIG=/path/to/config.json` to use a different config file.
 This is intentionally not an Electron app. The desktop path uses Tauri/Wry with the system WebKitGTK webview on Linux.
 
 The desktop path uses the MIT-licensed Rust `rs-ytmusic-api` crate for YouTube Music search. The local browser prototype still uses the GPL-3.0 `ytmusic-api` npm package.
+
+## Plugins and themes
+
+YoLite loads desktop plugins from `~/.config/yolite/plugins`. Each plugin uses its own directory:
+
+```text
+plugins/
+  warm-studio/
+    plugin.json
+    theme.css
+```
+
+`plugin.json`:
+
+```json
+{
+  "name": "Warm studio",
+  "version": "1.0.0",
+  "description": "Warm neutral surfaces and extra focus categories",
+  "discoverCategories": ["Deep focus", "Late-night jazz"]
+}
+```
+
+`theme.css` can override YoLite CSS variables and component styles. Plugins are local and declarative; they do not execute JavaScript. Only install themes from sources you trust because CSS changes the app interface.

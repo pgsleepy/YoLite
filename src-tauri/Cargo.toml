@@ -10,15 +10,17 @@ name = "yolite_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { git = "https://github.com/tauri-apps/tauri", rev = "e19121427332c8a14165999251cce415707a62fc", features = [] }
+tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
 dirs = "6.0.0"
 discord-rich-presence = "1.1.0"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "gzip", "rustls-tls"] }
 ring = "0.17.14"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-tauri = { git = "https://github.com/tauri-apps/tauri", rev = "e19121427332c8a14165999251cce415707a62fc", features = [] }
+tauri = { version = "=2.11.5", features = ["image-png"] }
+tauri-plugin-global-shortcut = "=2.3.2"
 thiserror = "2.0.17"
 tokio = { version = "1.47.1", features = ["sync"] }

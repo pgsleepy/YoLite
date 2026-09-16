@@ -1,4 +1,6 @@
 const audio = document.querySelector("#audio");
+const visualizer = document.querySelector("#visualizer");
+const visualizerContext = visualizer.getContext("2d");
 const splash = document.querySelector("#splash");
 const shell = document.querySelector("#shell");
 const searchForm = document.querySelector("#searchForm");
@@ -52,6 +54,8 @@ const mixLengthValue = document.querySelector("#mixLengthValue");
 const discoverFromHistory = document.querySelector("#discoverFromHistory");
 const discordPresence = document.querySelector("#discordPresence");
 const discordPresenceRow = document.querySelector("#discordPresenceRow");
+const volumeNormalization = document.querySelector("#volumeNormalization");
+const visualizerEnabled = document.querySelector("#visualizerEnabled");
 const prefetchCount = document.querySelector("#prefetchCount");
 const prefetchCountValue = document.querySelector("#prefetchCountValue");
 const cacheLimit = document.querySelector("#cacheLimit");
@@ -71,6 +75,24 @@ const nowArt = document.querySelector("#nowArt");
 const nowTitle = document.querySelector("#nowTitle");
 const nowArtist = document.querySelector("#nowArtist");
 const trackMenu = document.querySelector("#trackMenu");
+const profileButton = document.querySelector("#profileButton");
+const profilePicture = document.querySelector("#profilePicture");
+const profileFallback = document.querySelector("#profileFallback");
+const profileMenu = document.querySelector("#profileMenu");
+const profileName = document.querySelector("#profileName");
+const profileUserId = document.querySelector("#profileUserId");
+const profileLogin = document.querySelector("#profileLogin");
+const profileSettings = document.querySelector("#profileSettings");
+const miniPlayerButton = document.querySelector("#miniPlayerButton");
+const remoteButton = document.querySelector("#remoteButton");
+const remoteDialog = document.querySelector("#remoteDialog");
+const remoteQr = document.querySelector("#remoteQr");
+const remoteUrl = document.querySelector("#remoteUrl");
+const reloadPlugins = document.querySelector("#reloadPlugins");
+const pluginList = document.querySelector("#pluginList");
+const resetHotkeys = document.querySelector("#resetHotkeys");
+const hotkeyState = document.querySelector("#hotkeyState");
+const hotkeyInputs = [...document.querySelectorAll("[data-hotkey]")];
 const isTauri = Boolean(window.__TAURI__?.core?.invoke);
 
 let results = [];
@@ -99,11 +121,24 @@ let audioContext = null;
 let audioSource = null;
 let audioPreamp = null;
 let audioFilters = [];
+let audioCompressor = null;
+let audioAnalyser = null;
 let audioGraphFailed = false;
 let loopMode = "off";
 let playlistDialogTrack = null;
 let contextTrack = null;
 let listenAgainPage = 0;
+let miniPlayer = false;
+let loginPollTimer = 0;
+let pluginCategories = [];
+
+const defaultHotkeys = {
+  playPause: "Ctrl+Alt+Space",
+  next: "Ctrl+Alt+ArrowRight",
+  previous: "Ctrl+Alt+ArrowLeft",
+  volumeUp: "Ctrl+Alt+ArrowUp",
+  volumeDown: "Ctrl+Alt+ArrowDown"
+};
 
 const equalizerBands = [
   { key: "bass", frequency: 90, type: "lowshelf" },
@@ -150,6 +185,22 @@ function sessionMessage(payload) {
   return `${payload.cookieBytes} bytes saved${userSuffix}${channelSuffix}`;
 }
 
+function applySession(payload) {
+  userIdInput.value = payload.userId || "";
+  channelIdInput.value = payload.channelId || "";
+  sessionState.textContent = sessionMessage(payload);
+  profileName.textContent = payload.profileName || (payload.loggedIn ? "YouTube Music account" : "Not signed in");
+  profileUserId.textContent = payload.userId ? `User ID ${payload.userId}` : "No YouTube User ID";
+  if (payload.profilePicture) {
+    profilePicture.src = payload.profilePicture;
+    profileFallback.hidden = true;
+  } else {
+    profilePicture.removeAttribute("src");
+    profileFallback.hidden = false;
+    profileFallback.textContent = payload.loggedIn ? (payload.profileName || "Y").slice(0, 1).toUpperCase() : "?";
+  }
+}
+
 function crossfadeSeconds() {
   return Number(settingsCrossfade.value) || 0;
 }
@@ -178,7 +229,7 @@ function storedJson(key, fallback) {
 }
 
 function currentEqualizer() {
-  const values = { ...equalizerPresets.flat };
+  const values = { ...equalizerPresets.flat, normalization: Boolean(volumeNormalization?.checked) };
   for (const control of eqControls) {
     values[control.dataset.eq] = Number(control.value) || 0;
   }
@@ -221,6 +272,10 @@ function ensureAudioGraph() {
     audioContext = new AudioContext();
     audioSource = audioContext.createMediaElementSource(audio);
     audioPreamp = audioContext.createGain();
+    audioCompressor = audioContext.createDynamicsCompressor();
+    audioAnalyser = audioContext.createAnalyser();
+    audioAnalyser.fftSize = 128;
+    audioAnalyser.smoothingTimeConstant = 0.82;
     audioFilters = equalizerBands.map(band => {
       const filter = audioContext.createBiquadFilter();
       filter.type = band.type;
@@ -233,8 +288,10 @@ function ensureAudioGraph() {
       node.connect(filter);
       node = filter;
     }
-    node.connect(audioPreamp);
-    audioPreamp.connect(audioContext.destination);
+    node.connect(audioCompressor);
+    audioCompressor.connect(audioPreamp);
+    audioPreamp.connect(audioAnalyser);
+    audioAnalyser.connect(audioContext.destination);
     return true;
   } catch {
     audioGraphFailed = true;
@@ -249,6 +306,11 @@ function applyBrowserEqualizer() {
   for (const [index, band] of equalizerBands.entries()) {
     audioFilters[index].gain.value = values[band.key] || 0;
   }
+  audioCompressor.threshold.value = values.normalization ? -24 : 0;
+  audioCompressor.knee.value = values.normalization ? 24 : 0;
+  audioCompressor.ratio.value = values.normalization ? 8 : 1;
+  audioCompressor.attack.value = values.normalization ? 0.01 : 0;
+  audioCompressor.release.value = values.normalization ? 0.25 : 0.01;
 }
 
 function applyEqualizer() {
@@ -274,6 +336,7 @@ function applyVolume(value) {
     });
   }
   audio.volume = next;
+  syncRemoteState();
 }
 
 function applyCrossfade(value) {
@@ -834,12 +897,12 @@ function trackIdentity(track) {
   return `${String(track?.title || "").trim().toLowerCase()}::${String(track?.artist || "").trim().toLowerCase()}`;
 }
 
-async function startYouTubeMix(track) {
+async function fetchTrackMix(track) {
   const query = new URLSearchParams();
   if (track.playlistId) query.set("playlistId", track.playlistId);
   if (track.playlistParams) query.set("params", track.playlistParams);
-  setStatus(`Starting ${track.title} mix`);
-  const payload = await api(`/api/mix/${encodeURIComponent(track.id)}?${query}`);
+  const payload = await api(`/api/mix/${encodeURIComponent(track.id)}?${query}`)
+    .catch(() => ({ tracks: [] }));
   const seen = new Set();
   const seenIdentity = new Set();
   const tracks = [];
@@ -850,8 +913,42 @@ async function startYouTubeMix(track) {
     if (identity !== "::") seenIdentity.add(identity);
     tracks.push(item);
   }
-  if (!tracks.length) throw new Error("No mix found");
-  setTrackQueue(tracks, `${track.title} mix`);
+  const limit = Number(mixLength.value) || 18;
+  if (tracks.length < 2) {
+    const seed = { artist: track.artist || track.title, track };
+    for (const search of mixQueries(seed)) {
+      const searchPayload = await api(`/api/search?q=${encodeURIComponent(search)}`)
+        .catch(() => ({ results: [] }));
+      for (const item of searchPayload.results || []) {
+        const identity = trackIdentity(item);
+        if (!item?.id || seen.has(item.id) || (identity !== "::" && seenIdentity.has(identity))) continue;
+        seen.add(item.id);
+        if (identity !== "::") seenIdentity.add(identity);
+        tracks.push(item);
+        if (tracks.length >= limit) break;
+      }
+      if (tracks.length >= limit) break;
+    }
+  }
+  return tracks;
+}
+
+async function startYouTubeMix(track) {
+  if (!track?.id) return;
+  setStatus(`Starting ${track.title} mix`);
+  queue = [track];
+  currentIndex = 0;
+  renderQueue();
+  setQueueOpen(true);
+  if (currentTrack?.id !== track.id || (!nativePlaying && audio.paused)) {
+    playTrack(track, { reason: "manual" });
+  }
+  const tracks = await fetchTrackMix(track);
+  queue = tracks.length ? tracks : [track];
+  currentIndex = Math.max(0, queue.findIndex(item => item.id === currentTrack?.id));
+  renderQueue();
+  prefetchUpcomingTracks();
+  setStatus(queue.length > 1 ? `${track.title} mix` : `Playing ${track.title}`);
 }
 
 function setCardImage(image, src) {
@@ -1085,7 +1182,7 @@ function renderDiscoveryCategories(target) {
   title.textContent = "Genres and moods";
   const strip = document.createElement("div");
   strip.className = "category-strip";
-  discoveryCategories.forEach(category => {
+  [...new Set([...discoveryCategories, ...pluginCategories])].forEach(category => {
     const button = document.createElement("button");
     button.className = "category-button";
     button.type = "button";
@@ -1175,6 +1272,7 @@ function setNow(track) {
   syncLikeButton();
   renderHome();
   renderDiscover();
+  syncRemoteState();
 }
 
 function showPanel(panelId) {
@@ -1241,7 +1339,7 @@ function startNativeProgress() {
 }
 
 function prefetchWindowSize() {
-  return Math.max(0, Math.min(10, Number(prefetchCount.value) || 0));
+  return Math.max(0, Math.min(50, Number(prefetchCount.value) || 0));
 }
 
 function prefetchUpcomingTracks() {
@@ -1374,7 +1472,179 @@ function clearDiscordPresence() {
   return window.__TAURI__.core.invoke("clear_discord_presence").catch(() => {});
 }
 
-function playNext(reason = "manual") {
+function syncRemoteState() {
+  if (!isTauri) return;
+  window.__TAURI__.core.invoke("update_remote_state", {
+    track: currentTrack ? {
+      id: currentTrack.id || "",
+      title: currentTrack.title || "Unknown song",
+      artist: currentTrack.artist || "Unknown artist",
+      thumbnail: currentTrack.thumbnail || ""
+    } : null,
+    playing: Boolean(nativePlaying && !nativePaused),
+    volume: Number(volume.value)
+  }).catch(() => {});
+}
+
+function drawVisualizer(time) {
+  requestAnimationFrame(drawVisualizer);
+  if (!visualizerEnabled?.checked || visualizer.hidden) return;
+  const rect = visualizer.getBoundingClientRect();
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, Math.floor(rect.width * pixelRatio));
+  const height = Math.max(1, Math.floor(rect.height * pixelRatio));
+  if (visualizer.width !== width || visualizer.height !== height) {
+    visualizer.width = width;
+    visualizer.height = height;
+  }
+  visualizerContext.clearRect(0, 0, width, height);
+  let bass = 0.08;
+  let mids = 0.08;
+  if (audioAnalyser && !audio.paused) {
+    const data = new Uint8Array(audioAnalyser.frequencyBinCount);
+    audioAnalyser.getByteFrequencyData(data);
+    bass = data.slice(0, 9).reduce((sum, value) => sum + value, 0) / (9 * 255);
+    mids = data.slice(9, 30).reduce((sum, value) => sum + value, 0) / (21 * 255);
+  } else if (nativePlaying && !nativePaused) {
+    bass = 0.22 + Math.sin(time / 230) * 0.08 + Math.sin(time / 83) * 0.035;
+    mids = 0.17 + Math.sin(time / 410 + 1.7) * 0.06;
+  }
+  const energy = Math.max(0.04, Math.min(0.72, bass * 0.75 + mids * 0.35));
+  const colors = ["211,138,100", "154,95,83", "112,76,70"];
+  visualizerContext.lineCap = "round";
+  colors.forEach((color, layer) => {
+    const baseline = height * (0.58 + layer * 0.09);
+    const amplitude = height * (0.018 + energy * (0.065 - layer * 0.012));
+    visualizerContext.beginPath();
+    for (let x = 0; x <= width; x += Math.max(5, width / 170)) {
+      const progress = x / width;
+      const envelope = Math.sin(progress * Math.PI);
+      const y = baseline
+        + Math.sin(progress * Math.PI * (3.2 + layer) + time / (850 - layer * 130)) * amplitude * envelope
+        + Math.sin(progress * Math.PI * 9 + time / 330) * amplitude * 0.24 * envelope;
+      if (x === 0) visualizerContext.moveTo(x, y);
+      else visualizerContext.lineTo(x, y);
+    }
+    visualizerContext.strokeStyle = `rgba(${color},${0.08 + energy * 0.14})`;
+    visualizerContext.lineWidth = (38 - layer * 9) * pixelRatio;
+    visualizerContext.shadowBlur = 35 * pixelRatio;
+    visualizerContext.shadowColor = `rgba(${color},${0.1 + energy * 0.12})`;
+    visualizerContext.stroke();
+  });
+  visualizerContext.shadowBlur = 0;
+}
+
+function hotkeySettings() {
+  const stored = storedJson("yolite:hotkeys", defaultHotkeys);
+  return { ...defaultHotkeys, ...stored };
+}
+
+function renderHotkeys() {
+  const settings = hotkeySettings();
+  hotkeyInputs.forEach(input => {
+    input.value = settings[input.dataset.hotkey] || defaultHotkeys[input.dataset.hotkey];
+  });
+}
+
+function shortcutFromEvent(event) {
+  const parts = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.metaKey) parts.push("Meta");
+  let key = event.key;
+  if (key === " ") key = "Space";
+  if (key.length === 1) key = key.toUpperCase();
+  if (!["Control", "Alt", "Shift", "Meta"].includes(key)) parts.push(key);
+  return parts.join("+");
+}
+
+async function registerHotkeys() {
+  const shortcuts = Object.fromEntries(hotkeyInputs.map(input => [input.dataset.hotkey, input.value.trim()]));
+  localStorage.setItem("yolite:hotkeys", JSON.stringify(shortcuts));
+  if (!isTauri) {
+    hotkeyState.textContent = "Hotkeys work while browser tab is focused.";
+    return;
+  }
+  try {
+    await window.__TAURI__.core.invoke("set_global_shortcuts", { shortcuts });
+    hotkeyState.textContent = "Global hotkeys active.";
+  } catch (error) {
+    hotkeyState.textContent = errorMessage(error, "Could not register hotkeys");
+  }
+}
+
+async function handleControlAction(action) {
+  if (action === "playPause") return togglePlayback();
+  if (action === "next") return playNext("manual");
+  if (action === "previous") return playPrev();
+  if (action === "volumeUp") return applyVolume(Math.min(1, Number(volume.value) + 0.05));
+  if (action === "volumeDown") return applyVolume(Math.max(0, Number(volume.value) - 0.05));
+}
+
+async function toggleMiniPlayer() {
+  if (!isTauri) return;
+  miniPlayer = !miniPlayer;
+  try {
+    await window.__TAURI__.core.invoke("set_mini_player", { enabled: miniPlayer });
+    document.body.classList.toggle("mini-player", miniPlayer);
+    miniPlayerButton.classList.toggle("active", miniPlayer);
+  } catch (error) {
+    miniPlayer = !miniPlayer;
+    setStatus(errorMessage(error, "Could not open mini player"));
+  }
+}
+
+async function showRemoteController() {
+  if (!isTauri) return;
+  remoteButton.disabled = true;
+  try {
+    const payload = await window.__TAURI__.core.invoke("get_remote_controller");
+    remoteQr.innerHTML = payload.qrSvg;
+    remoteUrl.href = payload.url;
+    remoteUrl.textContent = payload.url;
+    remoteDialog.showModal?.();
+  } catch (error) {
+    setStatus(errorMessage(error, "Could not start phone controller"));
+  } finally {
+    remoteButton.disabled = false;
+  }
+}
+
+async function loadPlugins() {
+  pluginList.textContent = "";
+  pluginCategories = [];
+  document.querySelectorAll("style[data-yolite-plugin]").forEach(style => style.remove());
+  if (!isTauri) {
+    pluginList.textContent = "Plugins load in desktop app";
+    return;
+  }
+  try {
+    const plugins = await window.__TAURI__.core.invoke("load_plugins");
+    plugins.forEach(plugin => {
+      const item = document.createElement("div");
+      item.className = "plugin-item";
+      item.innerHTML = "<strong></strong><span></span><code></code>";
+      item.querySelector("strong").textContent = plugin.name;
+      item.querySelector("span").textContent = plugin.description || "YoLite plugin";
+      item.querySelector("code").textContent = plugin.version || "1.0.0";
+      pluginList.append(item);
+      if (plugin.css) {
+        const style = document.createElement("style");
+        style.dataset.yolitePlugin = plugin.id;
+        style.textContent = plugin.css;
+        document.head.append(style);
+      }
+      pluginCategories.push(...(plugin.discoverCategories || []));
+    });
+    if (!plugins.length) pluginList.textContent = "No plugins installed";
+    renderDiscover();
+  } catch (error) {
+    pluginList.textContent = errorMessage(error, "Could not load plugins");
+  }
+}
+
+async function playNext(reason = "manual") {
   if (!queue.length) return;
   if (reason === "auto" && loopMode === "one") {
     playTrack(queue[currentIndex], { reason });
@@ -1382,14 +1652,23 @@ function playNext(reason = "manual") {
   }
   const nextIndex = currentIndex + 1;
   if (nextIndex >= queue.length) {
-    if (loopMode !== "all") {
-      nativePlaying = false;
-      nativePaused = false;
-      syncPlayButton();
-      clearDiscordPresence();
-      return;
+    if (loopMode === "all") {
+      currentIndex = 0;
+    } else {
+      const seed = queue[currentIndex] || currentTrack;
+      const extension = await fetchTrackMix(seed);
+      const existing = new Set(queue.map(item => item.id));
+      queue.push(...extension.filter(item => !existing.has(item.id)));
+      renderQueue();
+      if (currentIndex + 1 >= queue.length) {
+        nativePlaying = false;
+        nativePaused = false;
+        syncPlayButton();
+        clearDiscordPresence();
+        return;
+      }
+      currentIndex += 1;
     }
-    currentIndex = 0;
   } else {
     currentIndex = nextIndex;
   }
@@ -1526,7 +1805,7 @@ document.querySelectorAll(".nav").forEach(button => {
   });
 });
 
-playBtn.addEventListener("click", async () => {
+async function togglePlayback() {
   if (!currentTrack && queue.length) {
     currentIndex = Math.max(currentIndex, 0);
     playTrack(queue[currentIndex], { reason: "manual" });
@@ -1540,6 +1819,7 @@ playBtn.addEventListener("click", async () => {
       nativePaused = !nativePaused;
       syncPlayButton();
       updateDiscordPresence(currentTrack, nativePaused);
+      syncRemoteState();
       setStatus(nativePaused ? "Paused" : "Playing");
     } else if (currentTrack) {
       playTrack(currentTrack, { reason: "manual" });
@@ -1548,7 +1828,9 @@ playBtn.addEventListener("click", async () => {
   }
   if (audio.paused) audio.play();
   else audio.pause();
-});
+}
+
+playBtn.addEventListener("click", togglePlayback);
 
 prevBtn.addEventListener("click", playPrev);
 nextBtn.addEventListener("click", playNext);
@@ -1583,13 +1865,38 @@ trackMenu.addEventListener("click", async event => {
 });
 document.addEventListener("pointerdown", event => {
   if (!trackMenu.hidden && !trackMenu.contains(event.target)) closeTrackMenu();
+  if (!profileMenu.hidden && !profileMenu.contains(event.target) && !profileButton.contains(event.target)) {
+    profileMenu.hidden = true;
+    profileButton.setAttribute("aria-expanded", "false");
+  }
 });
 document.addEventListener("keydown", event => {
   if (event.key === "Escape") closeTrackMenu();
+  if (!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")) {
+    const shortcut = shortcutFromEvent(event);
+    const action = Object.entries(hotkeySettings()).find(([, value]) => value === shortcut)?.[0];
+    if (action) {
+      event.preventDefault();
+      handleControlAction(action);
+      return;
+    }
+  }
   if (event.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")) {
     event.preventDefault();
     searchInput.focus();
   }
+});
+profileButton.addEventListener("click", () => {
+  profileMenu.hidden = !profileMenu.hidden;
+  profileButton.setAttribute("aria-expanded", String(!profileMenu.hidden));
+});
+profilePicture.addEventListener("error", () => {
+  profilePicture.removeAttribute("src");
+  profileFallback.hidden = false;
+});
+profileSettings.addEventListener("click", () => {
+  profileMenu.hidden = true;
+  showPanel("settingsPanel");
 });
 saveToPlaylist.addEventListener("click", event => {
   event.preventDefault();
@@ -1631,6 +1938,23 @@ discordPresence?.addEventListener("change", () => {
   if (discordPresence.checked) updateDiscordPresence();
   else clearDiscordPresence();
 });
+volumeNormalization.addEventListener("change", () => {
+  localStorage.setItem("yolite:volumeNormalization", JSON.stringify(volumeNormalization.checked));
+  applyEqualizer();
+});
+visualizerEnabled.addEventListener("change", () => {
+  localStorage.setItem("yolite:visualizer", JSON.stringify(visualizerEnabled.checked));
+  visualizer.hidden = !visualizerEnabled.checked;
+});
+hotkeyInputs.forEach(input => input.addEventListener("change", registerHotkeys));
+resetHotkeys.addEventListener("click", () => {
+  localStorage.setItem("yolite:hotkeys", JSON.stringify(defaultHotkeys));
+  renderHotkeys();
+  registerHotkeys();
+});
+miniPlayerButton.addEventListener("click", toggleMiniPlayer);
+remoteButton.addEventListener("click", showRemoteController);
+reloadPlugins.addEventListener("click", loadPlugins);
 resetEqualizer.addEventListener("click", () => setEqualizer(equalizerPresets.flat));
 presetButtons.forEach(button => {
   button.addEventListener("click", () => setEqualizer(equalizerPresets[button.dataset.preset] || equalizerPresets.flat));
@@ -1662,8 +1986,14 @@ seek.addEventListener("input", () => {
   audio.currentTime = Number(seek.value) / 1000 * audio.duration;
 });
 
-audio.addEventListener("play", syncPlayButton);
-audio.addEventListener("pause", syncPlayButton);
+audio.addEventListener("play", () => {
+  syncPlayButton();
+  syncRemoteState();
+});
+audio.addEventListener("pause", () => {
+  syncPlayButton();
+  syncRemoteState();
+});
 audio.addEventListener("ended", () => playNext("auto"));
 audio.addEventListener("timeupdate", () => {
   const knownDuration = audio.duration || currentTrack?.duration || 0;
@@ -1687,7 +2017,7 @@ saveCookies.addEventListener("click", async () => {
       body: JSON.stringify({ cookies: cookieInput.value, userId: userIdInput.value, channelId: channelIdInput.value })
     });
     cookieInput.value = "";
-    sessionState.textContent = sessionMessage(payload);
+    applySession(payload);
     librarySections = [];
     libraryNeedsLogin = false;
     playlists = [];
@@ -1720,7 +2050,7 @@ importBrowserCookies.addEventListener("click", async () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ browser: browserSource.value, userId: userIdInput.value, channelId: channelIdInput.value })
     });
-    sessionState.textContent = sessionMessage(payload);
+    applySession(payload);
     librarySections = [];
     libraryNeedsLogin = false;
     playlists = [];
@@ -1734,50 +2064,64 @@ importBrowserCookies.addEventListener("click", async () => {
   }
 });
 
-openAppLogin.addEventListener("click", async () => {
-  openAppLogin.disabled = true;
-  sessionState.textContent = "Opening in-app login";
-  try {
-    await api("/api/session/app-login/open", { method: "POST" });
-    sessionState.textContent = "Switch account in the login window, then use in-app login";
-  } catch (error) {
-    sessionState.textContent = errorMessage(error, "Could not open in-app login");
-  } finally {
-    openAppLogin.disabled = false;
-  }
-});
-
-useAppLogin.addEventListener("click", async () => {
-  useAppLogin.disabled = true;
-  sessionState.textContent = "Reading in-app YouTube Music login";
+async function importInAppLogin(silent = false) {
+  if (!silent) useAppLogin.disabled = true;
+  if (!silent) sessionState.textContent = "Reading in-app YouTube Music login";
   try {
     const payload = await api("/api/session/app-login/import", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ userId: userIdInput.value, channelId: channelIdInput.value })
+      body: JSON.stringify({ userId: "", channelId: channelIdInput.value })
     });
-    userIdInput.value = payload.userId || "";
-    channelIdInput.value = payload.channelId || "";
     cookieInput.value = "";
-    sessionState.textContent = sessionMessage(payload);
+    applySession(payload);
     librarySections = [];
     libraryNeedsLogin = false;
     playlists = [];
     activePlaylist = null;
     activePlaylistTracks = [];
     loadLibrary();
+    return true;
   } catch (error) {
-    sessionState.textContent = errorMessage(error);
+    if (!silent) sessionState.textContent = errorMessage(error);
+    return false;
   } finally {
-    useAppLogin.disabled = false;
+    if (!silent) useAppLogin.disabled = false;
   }
-});
+}
+
+async function pollInAppLogin(deadline = Date.now() + 5 * 60 * 1000) {
+  clearTimeout(loginPollTimer);
+  const imported = await importInAppLogin(true);
+  if (imported || Date.now() >= deadline) {
+    if (!imported) sessionState.textContent = "Login window timed out";
+    return;
+  }
+  loginPollTimer = setTimeout(() => pollInAppLogin(deadline), 2500);
+}
+
+async function beginInAppLogin() {
+  openAppLogin.disabled = true;
+  sessionState.textContent = "Opening in-app login";
+  try {
+    await api("/api/session/app-login/open", { method: "POST" });
+    sessionState.textContent = "Waiting for YouTube Music login";
+    pollInAppLogin();
+  } catch (error) {
+    sessionState.textContent = errorMessage(error, "Could not open in-app login");
+  } finally {
+    openAppLogin.disabled = false;
+  }
+}
+
+openAppLogin.addEventListener("click", beginInAppLogin);
+profileLogin.addEventListener("click", beginInAppLogin);
+
+useAppLogin.addEventListener("click", () => importInAppLogin(false));
 
 clearCookies.addEventListener("click", async () => {
-  await api("/api/session", { method: "DELETE" });
-  sessionState.textContent = "No cookies saved";
-  userIdInput.value = "";
-  channelIdInput.value = "";
+  const payload = await api("/api/session", { method: "DELETE" });
+  applySession(payload);
   librarySections = [];
   libraryNeedsLogin = false;
   playlists = [];
@@ -1789,9 +2133,7 @@ clearCookies.addEventListener("click", async () => {
 
 async function loadSession() {
   const payload = await api("/api/session");
-  userIdInput.value = payload.userId || "";
-  channelIdInput.value = payload.channelId || "";
-  sessionState.textContent = sessionMessage(payload);
+  applySession(payload);
 }
 
 async function loadLibrary() {
@@ -1883,6 +2225,9 @@ cacheLimit.value = localStorage.getItem("yolite:cacheLimitGb") || cacheLimit.val
 playlistWarnLimit.value = localStorage.getItem("yolite:playlistWarnLimit") || playlistWarnLimit.value;
 discoverFromHistory.checked = storedJson("yolite:discoverFromHistory", true);
 discordPresence.checked = storedJson("yolite:discordPresence", true);
+volumeNormalization.checked = storedJson("yolite:volumeNormalization", false);
+visualizerEnabled.checked = storedJson("yolite:visualizer", true);
+visualizer.hidden = !visualizerEnabled.checked;
 loopMode = ["off", "all", "one"].includes(localStorage.getItem("yolite:loopMode"))
   ? localStorage.getItem("yolite:loopMode")
   : "off";
@@ -1891,6 +2236,8 @@ updateSettingsLabels();
 renderResults();
 renderHistory();
 syncLoopButton();
+renderHotkeys();
+requestAnimationFrame(drawVisualizer);
 
 function hideSplash() {
   splash.classList.add("done");
@@ -1933,12 +2280,22 @@ renderSidebarPlaylists();
 renderQueue();
 setQueueOpen(false);
 syncPlayButton();
+registerHotkeys();
+loadPlugins();
 setTimeout(hideSplash, 1400);
 if (!isTauri) {
   appLoginActions.hidden = true;
   appLoginHelp.hidden = true;
   discordPresenceRow.hidden = true;
+  remoteButton.hidden = true;
+  miniPlayerButton.hidden = true;
+  profileLogin.hidden = true;
 }
 loadSession().catch(error => {
   sessionState.textContent = errorMessage(error);
 });
+
+if (isTauri && window.__TAURI__?.event?.listen) {
+  window.__TAURI__.event.listen("global-hotkey", event => handleControlAction(event.payload));
+  window.__TAURI__.event.listen("remote-control", event => handleControlAction(event.payload));
+}

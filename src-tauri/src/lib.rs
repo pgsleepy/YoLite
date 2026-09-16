@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -9,11 +10,14 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
+use qrcode::{QrCode, render::svg};
 use reqwest::{Client, header};
 use ring::digest::{SHA1_FOR_LEGACY_USE_ONLY, digest};
+use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::sync::Mutex as AsyncMutex;
 
 #[cfg(unix)]
@@ -41,6 +45,59 @@ struct SessionPayload {
     user_id: String,
     channel_id: String,
     library_authenticated: Option<bool>,
+    profile_name: String,
+    profile_picture: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteTrack {
+    id: String,
+    title: String,
+    artist: String,
+    thumbnail: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemotePlaybackState {
+    track: Option<RemoteTrack>,
+    playing: bool,
+    volume: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteControllerPayload {
+    url: String,
+    qr_svg: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginPayload {
+    id: String,
+    name: String,
+    version: String,
+    description: String,
+    css: String,
+    discover_categories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginManifest {
+    name: String,
+    #[serde(default = "default_plugin_version")]
+    version: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    discover_categories: Vec<String>,
+}
+
+fn default_plugin_version() -> String {
+    "1.0.0".to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -129,6 +186,8 @@ struct EqualizerPayload {
     high_mid: f64,
     #[serde(default)]
     treble: f64,
+    #[serde(default)]
+    normalization: bool,
 }
 
 impl EqualizerPayload {
@@ -150,12 +209,17 @@ impl EqualizerPayload {
     }
 
     fn mpv_filter(&self) -> Option<String> {
-        if self.is_flat() {
+        if self.is_flat() && !self.normalization {
             return None;
         }
         let preamp = 10_f64.powf(Self::db(self.preamp) / 20.0);
+        let normalize = if self.normalization {
+            ",dynaudnorm=f=150:g=9:p=0.85:m=8"
+        } else {
+            ""
+        };
         Some(format!(
-            "lavfi=[bass=g={:.1}:f=90:w=0.8,equalizer=f=250:t=q:w=1:g={:.1},equalizer=f=1000:t=q:w=1:g={:.1},equalizer=f=4000:t=q:w=1:g={:.1},treble=g={:.1}:f=10000:w=0.8,volume={:.4}]",
+            "lavfi=[bass=g={:.1}:f=90:w=0.8,equalizer=f=250:t=q:w=1:g={:.1},equalizer=f=1000:t=q:w=1:g={:.1},equalizer=f=4000:t=q:w=1:g={:.1},treble=g={:.1}:f=10000:w=0.8,volume={:.4}{normalize}]",
             Self::db(self.bass),
             Self::db(self.low_mid),
             Self::db(self.mid),
@@ -183,6 +247,9 @@ struct AppState {
     stream_cache: std::sync::Mutex<std::collections::HashMap<String, CachedStream>>,
     playback: std::sync::Mutex<Option<NativePlayback>>,
     discord: std::sync::Mutex<Option<DiscordIpcClient>>,
+    remote_state: std::sync::Mutex<RemotePlaybackState>,
+    controller_url: std::sync::Mutex<Option<String>>,
+    main_window_size: std::sync::Mutex<Option<tauri::PhysicalSize<u32>>>,
 }
 
 const DISCORD_APP_ID: &str = "1549900591088541827";
@@ -703,6 +770,27 @@ impl NativeMusicClient {
             .json::<Value>()
             .await
             .map_err(|error| error.to_string())
+    }
+
+    async fn account_profile(&self) -> Option<(String, String)> {
+        if self.cookies.is_empty() {
+            return None;
+        }
+        let data = self.request("account/account_menu", json!({})).await.ok()?;
+        let name = [
+            traverse_string(&data, &["accountName", "text"]),
+            traverse_string(&data, &["accountName", "runs", "text"]),
+            traverse_string(&data, &["channelHandle", "text"]),
+        ]
+        .into_iter()
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "YouTube Music account".to_string());
+        let picture = traverse_list(&data, &["accountPhoto"])
+            .into_iter()
+            .map(best_thumbnail)
+            .find(|value| !value.is_empty())
+            .unwrap_or_else(|| best_thumbnail(&data));
+        Some((name, picture))
     }
 
     async fn search_tracks(&self, query: &str) -> Result<Vec<TrackPayload>, String> {
@@ -1521,17 +1609,28 @@ fn library_payload_is_authenticated(data: &Value) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn get_session() -> Result<SessionPayload, String> {
+async fn get_session(state: tauri::State<'_, Arc<AppState>>) -> Result<SessionPayload, String> {
     let config = read_config();
     let path = config_path()?;
+    let logged_in = !config.cookies.is_empty();
+    let (profile_name, profile_picture) = if logged_in {
+        match get_client(&state).await {
+            Ok(client) => client.account_profile().await.unwrap_or_default(),
+            Err(_) => (String::new(), String::new()),
+        }
+    } else {
+        (String::new(), String::new())
+    };
     Ok(SessionPayload {
-        logged_in: !config.cookies.is_empty(),
+        logged_in,
         cookie_bytes: config.cookies.len(),
         config_path: path.display().to_string(),
         auth_user: config.auth_user,
         user_id: config.user_id,
         channel_id: config.channel_id,
         library_authenticated: None,
+        profile_name,
+        profile_picture,
     })
 }
 
@@ -1712,7 +1811,7 @@ async fn save_session(
     if cookies.is_empty() {
         return Err("Paste a Cookie header or cookies.txt export".to_string());
     }
-    let user_id = resolve_user_id(&cookies, &user_id, &existing.user_id).await?;
+    let user_id = resolve_user_id(&cookies, &user_id, "").await?;
     let channel_id = validate_channel_id(&channel_id)?;
     let detected_auth_user = authenticated_auth_user(&cookies, &user_id).await;
     if !user_id.is_empty() && detected_auth_user.is_none() {
@@ -1727,7 +1826,7 @@ async fn save_session(
         channel_id,
     })?;
     *state.client.lock().await = None;
-    let mut payload = get_session().await?;
+    let mut payload = get_session(state).await?;
     payload.library_authenticated = Some(authenticated);
     Ok(payload)
 }
@@ -1736,7 +1835,7 @@ async fn save_session(
 async fn clear_session(state: tauri::State<'_, Arc<AppState>>) -> Result<SessionPayload, String> {
     write_config(&Config::default())?;
     *state.client.lock().await = None;
-    get_session().await
+    get_session(state).await
 }
 
 #[tauri::command]
@@ -2047,7 +2146,8 @@ async fn import_app_login_session(
         channel_id,
     })?;
     *state.client.lock().await = None;
-    let mut payload = get_session().await?;
+    let _ = window.close();
+    let mut payload = get_session(state).await?;
     payload.library_authenticated = Some(true);
     Ok(payload)
 }
@@ -2098,7 +2198,7 @@ async fn import_browser_session(
                         channel_id: channel_id.clone(),
                     })?;
                     *state.client.lock().await = None;
-                    let mut payload = get_session().await?;
+                    let mut payload = get_session(state).await?;
                     payload.library_authenticated = Some(true);
                     return Ok(payload);
                 }
@@ -2121,7 +2221,7 @@ async fn import_browser_session(
         channel_id,
     })?;
     *state.client.lock().await = None;
-    let mut payload = get_session().await?;
+    let mut payload = get_session(state).await?;
     payload.library_authenticated = Some(false);
     Ok(payload)
 }
@@ -2792,6 +2892,186 @@ fn start_stream_server(app: tauri::AppHandle) -> Result<String, String> {
     Ok(format!("http://{addr}"))
 }
 
+fn secure_token() -> Result<String, String> {
+    let mut bytes = [0_u8; 18];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| "Could not create controller token".to_string())?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn local_network_ip() -> Result<String, String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
+    socket
+        .connect("8.8.8.8:80")
+        .map_err(|error| error.to_string())?;
+    socket
+        .local_addr()
+        .map(|address| address.ip().to_string())
+        .map_err(|error| error.to_string())
+}
+
+fn http_response(stream: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) {
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(body);
+}
+
+fn controller_html(token: &str) -> String {
+    r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YoLite remote</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif}*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;background:#0b0c0d;color:#f4f1eb;padding:22px}.card{width:min(430px,100%);padding:22px;border:1px solid #ffffff18;border-radius:22px;background:#15171ae8;box-shadow:0 26px 80px #0008}.now{display:grid;grid-template-columns:82px 1fr;gap:16px;align-items:center}.now img{width:82px;height:82px;border-radius:14px;object-fit:cover;background:#24282c}.muted{color:#aaa7a1}.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:22px 0 12px}button,a{min-height:52px;border:0;border-radius:13px;background:#24282c;color:#f4f1eb;font:700 16px inherit;text-decoration:none;display:grid;place-items:center}button.primary{background:#f4f1eb;color:#111315}.secondary{display:grid;grid-template-columns:1fr 1fr;gap:10px}.download{margin-top:10px;background:#d38a64;color:#111315}h1{font-size:17px;margin:0 0 18px}strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:18px}.muted{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:4px}
+</style></head>
+<body><main class="card"><h1>YoLite remote</h1><section class="now"><img id="art" alt=""><div><strong id="title">Nothing playing</strong><div id="artist" class="muted">Pick a song in YoLite</div></div></section><div class="controls"><button data-action="previous">Previous</button><button class="primary" data-action="playPause">Play / pause</button><button data-action="next">Next</button></div><div class="secondary"><button data-action="volumeDown">Volume down</button><button data-action="volumeUp">Volume up</button></div><a id="download" class="download" hidden>Download song</a></main><script>
+const token="__TOKEN__";const title=document.querySelector('#title');const artist=document.querySelector('#artist');const art=document.querySelector('#art');const download=document.querySelector('#download');document.querySelectorAll('[data-action]').forEach(button=>button.onclick=()=>fetch(`/api/control/${token}/${button.dataset.action}`));async function update(){try{const state=await fetch(`/api/state/${token}`).then(response=>response.json());title.textContent=state.track?.title||'Nothing playing';artist.textContent=state.track?.artist||'Pick a song in YoLite';if(state.track?.thumbnail)art.src=state.track.thumbnail;else art.removeAttribute('src');if(state.track?.id){download.hidden=false;download.href=`/download/${token}/${state.track.id}`}else download.hidden=true}catch{}}update();setInterval(update,1500);
+</script></body></html>"#
+        .replace("__TOKEN__", token)
+}
+
+fn safe_download_name(value: &str) -> String {
+    let name = value
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '.'))
+        .take(100)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        "yolite-song".to_string()
+    } else {
+        name
+    }
+}
+
+fn handle_controller_download(
+    stream: &mut TcpStream,
+    app: &tauri::AppHandle,
+    state: &AppState,
+    video_id: &str,
+) {
+    if !valid_video_id(video_id) {
+        return http_response(stream, "400 Bad Request", "text/plain", b"Invalid video id");
+    }
+    let config = read_config();
+    let cookie_file = TempCookieFile::new(&config.cookies).ok().flatten();
+    let ytdlp = match ytdlp_path(app) {
+        Ok(path) => path,
+        Err(error) => {
+            return http_response(stream, "502 Bad Gateway", "text/plain", error.as_bytes());
+        }
+    };
+    let mut child = match external_command(&ytdlp)
+        .args(ytdlp_stream_args(
+            video_id,
+            cookie_file.as_ref().map(|file| file.path.as_path()),
+        ))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return http_response(
+                stream,
+                "502 Bad Gateway",
+                "text/plain",
+                error.to_string().as_bytes(),
+            );
+        }
+    };
+    let title = state
+        .remote_state
+        .lock()
+        .ok()
+        .and_then(|remote| remote.track.clone())
+        .filter(|track| track.id == video_id)
+        .map(|track| safe_download_name(&track.title))
+        .unwrap_or_else(|| "yolite-song".to_string());
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\ncontent-type: audio/mp4\r\ncontent-disposition: attachment; filename=\"{title}.m4a\"\r\ncache-control: no-store\r\nconnection: close\r\n\r\n"
+    );
+    if let Some(mut output) = child.stdout.take() {
+        let _ = std::io::copy(&mut output, stream);
+    }
+    let _ = child.wait();
+}
+
+fn handle_controller_request(
+    mut stream: TcpStream,
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    token: String,
+) {
+    let Some(request) = read_http_request(&mut stream) else {
+        return;
+    };
+    let Some(path) = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .map(|path| path.split('?').next().unwrap_or(path))
+    else {
+        return;
+    };
+    if path == format!("/controller/{token}") {
+        return http_response(
+            &mut stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            controller_html(&token).as_bytes(),
+        );
+    }
+    if path == format!("/api/state/{token}") {
+        let remote = state
+            .remote_state
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default();
+        let body = serde_json::to_vec(&remote).unwrap_or_else(|_| b"{}".to_vec());
+        return http_response(&mut stream, "200 OK", "application/json", &body);
+    }
+    if let Some(action) = path.strip_prefix(&format!("/api/control/{token}/")) {
+        if matches!(
+            action,
+            "playPause" | "next" | "previous" | "volumeUp" | "volumeDown"
+        ) {
+            let _ = app.emit("remote-control", action.to_string());
+            return http_response(&mut stream, "204 No Content", "text/plain", b"");
+        }
+    }
+    if let Some(video_id) = path.strip_prefix(&format!("/download/{token}/")) {
+        return handle_controller_download(&mut stream, &app, &state, video_id);
+    }
+    http_response(&mut stream, "404 Not Found", "text/plain", b"Not found");
+}
+
+fn start_controller_server(app: tauri::AppHandle, state: Arc<AppState>) -> Result<String, String> {
+    let listener = TcpListener::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
+    let token = secure_token()?;
+    let url = format!("http://{}:{port}/controller/{token}", local_network_ip()?);
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let app = app.clone();
+            let state = state.clone();
+            let token = token.clone();
+            thread::spawn(move || handle_controller_request(stream, app, state, token));
+        }
+    });
+    Ok(url)
+}
+
 fn valid_video_id(video_id: &str) -> bool {
     video_id.len() >= 6
         && video_id
@@ -2954,6 +3234,188 @@ fn ytdlp_resolve_url(
     Ok(stream_url)
 }
 
+#[tauri::command]
+fn set_global_shortcuts(
+    app: tauri::AppHandle,
+    shortcuts: HashMap<String, String>,
+) -> Result<(), String> {
+    let manager = app.global_shortcut();
+    manager
+        .unregister_all()
+        .map_err(|error| format!("Could not clear global hotkeys: {error}"))?;
+    for (action, shortcut) in shortcuts {
+        if !matches!(
+            action.as_str(),
+            "playPause" | "next" | "previous" | "volumeUp" | "volumeDown"
+        ) || shortcut.trim().is_empty()
+        {
+            continue;
+        }
+        let action_name = action.clone();
+        manager
+            .on_shortcut(shortcut.trim(), move |app, _, event| {
+                if event.state() == ShortcutState::Pressed {
+                    let _ = app.emit("global-hotkey", action_name.clone());
+                }
+            })
+            .map_err(|error| format!("Could not register {action}: {error}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_mini_player(
+    app: tauri::AppHandle,
+    enabled: bool,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window is unavailable".to_string())?;
+    if enabled {
+        if let Ok(mut size) = state.main_window_size.lock() {
+            *size = window.inner_size().ok();
+        }
+        window
+            .set_min_size(None::<tauri::Size>)
+            .map_err(|error| error.to_string())?;
+        window
+            .set_size(tauri::PhysicalSize::new(480, 150))
+            .map_err(|error| error.to_string())?;
+        window
+            .set_always_on_top(true)
+            .map_err(|error| error.to_string())?;
+        window
+            .set_decorations(false)
+            .map_err(|error| error.to_string())?;
+    } else {
+        window
+            .set_decorations(true)
+            .map_err(|error| error.to_string())?;
+        window
+            .set_always_on_top(false)
+            .map_err(|error| error.to_string())?;
+        window
+            .set_min_size(Some(tauri::PhysicalSize::new(860, 560)))
+            .map_err(|error| error.to_string())?;
+        let size = state
+            .main_window_size
+            .lock()
+            .ok()
+            .and_then(|size| *size)
+            .unwrap_or_else(|| tauri::PhysicalSize::new(1180, 760));
+        window.set_size(size).map_err(|error| error.to_string())?;
+    }
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
+fn plugin_root() -> Result<PathBuf, String> {
+    let config = config_path()?;
+    let root = config
+        .parent()
+        .ok_or_else(|| "Could not find plugin directory".to_string())?
+        .join("plugins");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let guide = root.join("README.md");
+    if !guide.exists() {
+        fs::write(
+            guide,
+            "# YoLite plugins\n\nCreate one directory per plugin. Add `plugin.json` and optional `theme.css`.\n\n```json\n{\n  \"name\": \"My theme\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Custom YoLite colors\",\n  \"discoverCategories\": [\"Deep focus\"]\n}\n```\n\nPlugins are declarative. Theme CSS runs in YoLite's interface; only install plugins you trust.\n",
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(root)
+}
+
+#[tauri::command]
+fn load_plugins() -> Result<Vec<PluginPayload>, String> {
+    let root = plugin_root()?;
+    let mut plugins = Vec::new();
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let manifest_path = path.join("plugin.json");
+        let Ok(raw) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<PluginManifest>(&raw) else {
+            continue;
+        };
+        let id = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("plugin")
+            .to_string();
+        let css = fs::read_to_string(path.join("theme.css"))
+            .unwrap_or_default()
+            .chars()
+            .take(256 * 1024)
+            .collect();
+        let discover_categories = manifest
+            .discover_categories
+            .into_iter()
+            .map(|value| value.trim().chars().take(60).collect::<String>())
+            .filter(|value| !value.is_empty())
+            .take(32)
+            .collect();
+        plugins.push(PluginPayload {
+            id,
+            name: if manifest.name.trim().is_empty() {
+                "Unnamed plugin".to_string()
+            } else {
+                manifest.name
+            },
+            version: manifest.version,
+            description: manifest.description,
+            css,
+            discover_categories,
+        });
+    }
+    plugins.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(plugins)
+}
+
+#[tauri::command]
+fn update_remote_state(
+    track: Option<RemoteTrack>,
+    playing: bool,
+    volume: f64,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let mut remote = state
+        .remote_state
+        .lock()
+        .map_err(|_| "Remote controller state is unavailable".to_string())?;
+    remote.track = track;
+    remote.playing = playing;
+    remote.volume = volume.clamp(0.0, 1.0);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_remote_controller(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<RemoteControllerPayload, String> {
+    let url = state
+        .controller_url
+        .lock()
+        .map_err(|_| "Phone controller state is unavailable".to_string())?
+        .clone()
+        .ok_or_else(|| "Phone controller is unavailable".to_string())?;
+    let code = QrCode::new(url.as_bytes()).map_err(|error| error.to_string())?;
+    let qr_svg = code
+        .render::<svg::Color>()
+        .min_dimensions(240, 240)
+        .dark_color(svg::Color("#111315"))
+        .light_color(svg::Color("#f7f4ee"))
+        .build();
+    Ok(RemoteControllerPayload { url, qr_svg })
+}
+
 fn discord_text(value: &str, fallback: &str) -> String {
     let text = value.trim();
     let text = if text.is_empty() { fallback } else { text };
@@ -3040,6 +3502,7 @@ pub fn run() {
     let setup_state = state.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .setup(move |app| {
             match start_stream_server(app.handle().clone()) {
@@ -3050,11 +3513,20 @@ pub fn run() {
                 }
                 Err(error) => eprintln!("Could not start Yolite stream server: {error}"),
             }
-            if let (Some(window), Some(icon)) = (
-                app.get_webview_window("main"),
-                app.default_window_icon().cloned(),
-            ) {
-                let _ = window.set_icon(icon);
+            match start_controller_server(app.handle().clone(), setup_state.clone()) {
+                Ok(url) => {
+                    if let Ok(mut target) = setup_state.controller_url.lock() {
+                        *target = Some(url);
+                    }
+                }
+                Err(error) => eprintln!("Could not start Yolite phone controller: {error}"),
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(icon) =
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))
+                {
+                    let _ = window.set_icon(icon);
+                }
             }
             Ok(())
         })
@@ -3084,7 +3556,12 @@ pub fn run() {
             add_track_to_playlist,
             resolve_track,
             update_discord_presence,
-            clear_discord_presence
+            clear_discord_presence,
+            set_global_shortcuts,
+            set_mini_player,
+            load_plugins,
+            update_remote_state,
+            get_remote_controller
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yolite");
@@ -3242,6 +3719,7 @@ mod tests {
             mid: 0.0,
             high_mid: 3.0,
             treble: -20.0,
+            normalization: false,
         };
         let filter = equalizer.mpv_filter().unwrap();
 
@@ -3250,6 +3728,22 @@ mod tests {
         assert!(filter.contains("treble=g=-12.0:f=10000"));
         assert!(filter.contains("volume=1.9953"));
         assert!(EqualizerPayload::default().mpv_filter().is_none());
+        let normalized = EqualizerPayload {
+            normalization: true,
+            ..EqualizerPayload::default()
+        };
+        assert!(normalized.mpv_filter().unwrap().contains("dynaudnorm"));
+    }
+
+    #[test]
+    fn test_controller_uses_private_token_and_safe_download_name() {
+        let token = secure_token().unwrap();
+        assert_eq!(token.len(), 36);
+        assert!(token.chars().all(|character| character.is_ascii_hexdigit()));
+        assert!(controller_html(&token).contains(&format!("const token=\"{token}\"")));
+        let name = safe_download_name("Song / ../../ bad?");
+        assert!(!name.contains('/'));
+        assert!(!name.contains('?'));
     }
 
     #[test]
