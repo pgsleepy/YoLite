@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Yolite</title>
+    <meta name="description" content="Yolite is a focused desktop player for YouTube Music.">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#homePanel">Skip to music</a>
+    <div id="splash" class="splash" aria-label="Opening Yolite">
+      <img src="/logo.png" alt="">
+      <span>Yolite</span>
+    </div>
+    <div id="shell" class="shell">
+      <header class="topbar">
+        <span class="topbar-wordmark">Yolite</span>
+        <div class="search-stack">
+          <form id="searchForm" class="searchbar">
+            <span class="ico search-ico"></span>
+            <input id="searchInput" type="search" autocomplete="off" placeholder="Search songs, artists, albums" aria-label="Search music">
+            <kbd>/</kbd>
+            <button type="submit">Search</button>
+          </form>
+          <div class="search-chips" id="searchChips">
+            <button class="chip active" type="button" data-scope="all">All</button>
+            <button class="chip" type="button" data-scope="title">Title</button>
+            <button class="chip" type="button" data-scope="artist">Artist</button>
+            <button class="chip" type="button" data-scope="album">Album</button>
+            <button class="chip" type="button" data-scope="song">Songs</button>
+            <button class="chip" type="button" data-scope="video">Videos</button>
+          </div>
+        </div>
+        <span class="topbar-hint">your music, lighter</span>
+      </header>
+      <aside class="sidebar">
+        <div class="brand">
+          <img class="mark" src="/logo.png" alt="">
+          <span>Yolite</span>
+        </div>
+        <button class="nav active" data-panel="homePanel">
+          <span class="ico home-ico"></span>
+          Home
+        </button>
+        <button class="nav" data-panel="libraryPanel">
+          <span class="ico library-ico"></span>
+          Library
+        </button>
+        <button class="nav" data-panel="discoverPanel">
+          <span class="ico discover-ico"></span>
+          Discover
+        </button>
+        <button class="nav" data-panel="historyPanel">
+          <span class="ico history-ico"></span>
+          History
+        </button>
+        <button class="nav" data-panel="settingsPanel">
+          <span class="ico settings-ico"></span>
+          Settings
+        </button>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Playlists</div>
+          <div id="sidebarPlaylists" class="playlist-nav"></div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section id="homePanel" class="panel active">
+          <div class="section-top">
+            <h1>Home</h1>
+          </div>
+          <div id="home" class="library-sections"></div>
+        </section>
+
+        <section id="searchPanel" class="panel">
+          <div class="section-top">
+            <h1>Results</h1>
+          </div>
+          <div id="results" class="track-list"></div>
+        </section>
+
+        <section id="libraryPanel" class="panel">
+          <div class="section-top">
+            <h1>Library</h1>
+            <div class="row-actions">
+              <button id="newPlaylist" class="ghost">New playlist</button>
+              <button id="refreshLibrary" class="ghost">Refresh</button>
+            </div>
+          </div>
+          <div id="library" class="library-sections"></div>
+        </section>
+
+        <section id="discoverPanel" class="panel">
+          <div class="section-top">
+            <h1>Discover</h1>
+            <button id="refreshDiscover" class="ghost">Refresh</button>
+          </div>
+          <div id="discover" class="discover-sections"></div>
+        </section>
+
+        <section id="historyPanel" class="panel">
+          <div class="section-top">
+            <div>
+              <span class="eyebrow">Listening log</span>
+              <h1>History</h1>
+            </div>
+            <span class="section-note">Last 50 plays</span>
+          </div>
+          <div id="history" class="track-list"></div>
+        </section>
+
+        <section id="settingsPanel" class="panel">
+          <div class="section-top">
+            <h1>Settings</h1>
+            <span id="settingsState" class="status">Saved locally</span>
+          </div>
+          <div class="settings-grid">
+            <section class="settings-section">
+              <h2>Performance</h2>
+              <label class="setting-row">
+                <span>Prefetch</span>
+                <input id="prefetchCount" type="range" min="0" max="10" step="1" value="5">
+                <output id="prefetchCountValue">5 tracks</output>
+              </label>
+              <label class="setting-row">
+                <span>Cache limit</span>
+                <input id="cacheLimit" type="range" min="0" max="20" step="1" value="4">
+                <output id="cacheLimitValue">4 GB</output>
+              </label>
+              <label class="setting-row">
+                <span>Warn at</span>
+                <input id="playlistWarnLimit" type="range" min="25" max="500" step="25" value="100">
+                <output id="playlistWarnLimitValue">100 songs</output>
+              </label>
+            </section>
+            <section class="settings-section">
+              <h2>Playback</h2>
+              <label class="setting-row">
+                <span>Volume</span>
+                <input id="settingsVolume" type="range" min="0" max="1" step="0.01" value="0.8">
+              </label>
+              <label class="setting-row">
+                <span>Crossfade</span>
+                <input id="settingsCrossfade" type="range" min="0" max="10" step="1" value="0">
+                <output id="crossfadeValue">0s</output>
+              </label>
+              <label class="setting-row">
+                <span>Fade mode</span>
+                <select id="crossfadeMode">
+                  <option value="auto">Only automatic transitions</option>
+                  <option value="always">Every track change</option>
+                </select>
+              </label>
+            </section>
+            <section class="settings-section">
+              <div class="settings-heading">
+                <h2>Equalizer</h2>
+                <button id="resetEqualizer" class="ghost small" type="button">Reset</button>
+              </div>
+              <div class="preset-row">
+                <button class="chip" type="button" data-preset="flat">Flat</button>
+                <button class="chip" type="button" data-preset="bass">Bass</button>
+                <button class="chip" type="button" data-preset="warm">Warm</button>
+                <button class="chip" type="button" data-preset="bright">Bright</button>
+                <button class="chip" type="button" data-preset="vocal">Vocal</button>
+              </div>
+              <label class="setting-row">
+                <span>Preamp</span>
+                <input class="eq-control" id="eqPreamp" data-eq="preamp" type="range" min="-12" max="12" step="1" value="0">
+                <output id="eqPreampValue">0 dB</output>
+              </label>
+              <label class="setting-row">
+                <span>Low</span>
+                <input class="eq-control" id="eqBass" data-eq="bass" type="range" min="-12" max="12" step="1" value="0">
+                <output id="eqBassValue">0 dB</output>
+              </label>
+              <label class="setting-row">
+                <span>Low Mid</span>
+                <input class="eq-control" id="eqLowMid" data-eq="lowMid" type="range" min="-12" max="12" step="1" value="0">
+                <output id="eqLowMidValue">0 dB</output>
+              </label>
+              <label class="setting-row">
+                <span>Mid</span>
+                <input class="eq-control" id="eqMid" data-eq="mid" type="range" min="-12" max="12" step="1" value="0">
+                <output id="eqMidValue">0 dB</output>
+              </label>
+              <label class="setting-row">
+                <span>High Mid</span>
+                <input class="eq-control" id="eqHighMid" data-eq="highMid" type="range" min="-12" max="12" step="1" value="0">
+                <output id="eqHighMidValue">0 dB</output>
+              </label>
+              <label class="setting-row">
+                <span>High</span>
+                <input class="eq-control" id="eqTreble" data-eq="treble" type="range" min="-12" max="12" step="1" value="0">
+                <output id="eqTrebleValue">0 dB</output>
+              </label>
+            </section>
+            <section class="settings-section">
+              <h2>Recommendations</h2>
+              <label class="setting-row">
+                <span>Mix length</span>
+                <input id="mixLength" type="range" min="8" max="30" step="1" value="18">
+                <output id="mixLengthValue">18 tracks</output>
+              </label>
+              <label class="setting-check">
+                <input id="discoverFromHistory" type="checkbox" checked>
+                <span>Use listening history</span>
+              </label>
+              <label class="setting-check tauri-only" id="discordPresenceRow">
+                <input id="discordPresence" type="checkbox" checked>
+                <span>Share current song on Discord</span>
+              </label>
+            </section>
+            <section class="settings-section settings-section-wide">
+              <div class="settings-heading">
+                <h2>Session</h2>
+                <span id="sessionState" class="status">Checking</span>
+              </div>
+              <div class="session-grid">
+                <a id="openYoutubeMusic" class="external" href="https://music.youtube.com" target="_blank" rel="noreferrer">Open YouTube Music</a>
+                <div class="import-row">
+                  <select id="browserSource">
+                    <option value="auto">Auto</option>
+                    <option value="firefox">Firefox</option>
+                    <option value="chrome">Chrome</option>
+                    <option value="chromium">Chromium</option>
+                    <option value="brave">Brave</option>
+                    <option value="edge">Edge</option>
+                    <option value="opera">Opera</option>
+                    <option value="vivaldi">Vivaldi</option>
+                  </select>
+                  <button id="importBrowserCookies">Import Browser Cookies</button>
+                </div>
+                <div class="row-actions tauri-only" id="appLoginActions">
+                  <button id="openAppLogin">Open In-App Login</button>
+                  <button id="useAppLogin" class="ghost">Use In-App Login</button>
+                </div>
+                <p class="help-text tauri-only" id="appLoginHelp">
+                  Open the in-app login window, sign in or switch to the YouTube account you use for music, then use that login here.
+                </p>
+                <label class="session-field">
+                  <span>YouTube account User ID</span>
+                  <input id="userIdInput" type="text" spellcheck="false" placeholder="Paste numeric Brand Account ID">
+                </label>
+                <label class="session-field">
+                  <span>YouTube Channel ID</span>
+                  <input id="channelIdInput" type="text" spellcheck="false" placeholder="Starts with UC">
+                </label>
+                <p class="help-text">
+                  If one Gmail has multiple YouTube accounts, open
+                  <a href="https://www.youtube.com/account_advanced" target="_blank" rel="noreferrer">Advanced account settings</a>
+                  while switched to the account you use for music. Use the Channel ID there to include public YouTube playlists.
+                  If needed for Music account selection, use the numeric Brand Account ID from the
+                  <code>/b/&lt;id&gt;/</code> URL at
+                  <a href="https://myaccount.google.com/brandaccounts" target="_blank" rel="noreferrer">Brand Accounts</a>.
+                </p>
+                <textarea id="cookieInput" spellcheck="false" placeholder="Paste Cookie header from music.youtube.com or cookies.txt export"></textarea>
+                <div class="row-actions">
+                  <button id="saveCookies">Save Session</button>
+                  <button id="clearCookies" class="ghost">Clear Cookies</button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+      <aside id="queueDrawer" class="queue-drawer" hidden>
+        <div class="drawer-top">
+          <h2>Queue</h2>
+          <button id="clearQueue" class="ghost small">Clear</button>
+        </div>
+        <div id="queue" class="track-list compact"></div>
+      </aside>
+    </div>
+
+    <footer class="player">
+      <div class="now">
+        <img id="nowArt" alt="">
+        <div>
+          <div id="nowTitle" class="title">Nothing playing</div>
+          <div id="nowArtist" class="muted">Pick a track</div>
+        </div>
+        <button id="likeBtn" class="round mini" aria-label="Like"><span class="heart-shape"></span></button>
+        <button id="saveTrackBtn" class="round mini" aria-label="Save to playlist"><span class="plus-shape"></span></button>
+      </div>
+      <div class="transport">
+        <div class="buttons">
+          <button id="prevBtn" class="round" aria-label="Previous"><span class="prev-shape"></span></button>
+          <button id="playBtn" class="round primary" aria-label="Play"><span id="playShape" class="play-shape"></span></button>
+          <button id="nextBtn" class="round" aria-label="Next"><span class="next-shape"></span></button>
+          <button id="loopBtn" class="round" aria-label="Loop off" aria-pressed="false"><span class="loop-shape">↻</span></button>
+          <button id="queueToggle" class="round" aria-label="Queue"><span class="queue-lines"></span></button>
+        </div>
+        <div class="timeline">
+          <span id="elapsed">0:00</span>
+          <input id="seek" type="range" min="0" max="1000" value="0">
+          <span id="duration">0:00</span>
+        </div>
+      </div>
+      <div class="volume">
+        <span class="ico volume-ico"></span>
+        <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8">
+      </div>
+      <audio id="audio" preload="none"></audio>
+    </footer>
+
+    <span id="status" class="sr-only" role="status" aria-live="polite">Ready</span>
+
+    <menu id="trackMenu" class="context-menu" hidden>
+      <button type="button" data-menu-action="mix">Start mix</button>
+      <button type="button" data-menu-action="next">Play after this song</button>
+      <button type="button" data-menu-action="playlist">Add to playlist</button>
+    </menu>
+
+    <dialog id="playlistDialog" class="playlist-dialog">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-head">
+          <h2>Save to playlist</h2>
+          <button id="closePlaylistDialog" class="ghost small" value="cancel">Close</button>
+        </div>
+        <label class="session-field">
+          <span>Playlist</span>
+          <select id="playlistSelect"></select>
+        </label>
+        <button id="saveToPlaylist" value="default">Save track</button>
+        <div class="dialog-divider"></div>
+        <label class="session-field">
+          <span>New playlist name</span>
+          <input id="newPlaylistName" type="text" maxlength="80" placeholder="Road trip">
+        </label>
+        <button id="createPlaylist" value="default">Create playlist</button>
+      </form>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
