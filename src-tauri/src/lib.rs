@@ -274,6 +274,22 @@ mod tests {
     }
 
     #[test]
+    fn test_native_player_keeps_startup_errors_visible() {
+        let args = player_args(
+            Path::new("/tmp/yolite-test.sock"),
+            0.8,
+            "Test track",
+            "https://stream.example/audio.m4a",
+            Path::new("/usr/bin/yt-dlp"),
+            &EqualizerPayload::default(),
+            false,
+        );
+
+        assert!(!args.iter().any(|argument| argument == "--really-quiet"));
+        assert!(args.iter().any(|argument| argument == "--no-terminal"));
+    }
+
+    #[test]
     fn test_native_visualizer_uses_audio_metadata() {
         let payload = visualizer_payload(&json!({
             "lavfi.astats.Overall.RMS_level": "-18.0",

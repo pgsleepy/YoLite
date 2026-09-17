@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -219,7 +219,6 @@ pub(crate) fn player_args(
     let mut args = vec![
         "--no-video".to_string(),
         "--no-terminal".to_string(),
-        "--really-quiet".to_string(),
         "--force-window=no".to_string(),
         "--idle=no".to_string(),
         format!("--input-ipc-server={}", ipc_path.display()),
@@ -345,7 +344,10 @@ pub(crate) fn spawn_native_playback(
         format!("{title} - {artist}")
     };
 
-    let player_child = external_command(&player)
+    let error_path = PathBuf::from(format!("{}.log", ipc_path.display()));
+    let error_file = fs::File::create(&error_path)
+        .map_err(|error| format!("Could not create mpv diagnostic log: {error}"))?;
+    let mut player_child = external_command(&player)
         .args(player_args(
             &ipc_path,
             volume,
@@ -356,14 +358,67 @@ pub(crate) fn spawn_native_playback(
             visualizer_enabled,
         ))
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(error_file))
         .spawn()
-        .map_err(|error| format!("Failed to start {}: {error}", player.display()))?;
+        .map_err(|error| {
+            let _ = fs::remove_file(&error_path);
+            format!("Failed to start {}: {error}", player.display())
+        })?;
+
+    wait_for_player_start(&mut player_child, &ipc_path, &error_path)?;
 
     Ok(NativePlayback {
         player: player_child,
         ipc_path,
     })
+}
+
+fn mpv_startup_failure(status: Option<std::process::ExitStatus>, error_path: &Path) -> String {
+    let mut details = String::new();
+    if let Ok(mut file) = fs::File::open(error_path) {
+        let _ = file.read_to_string(&mut details);
+    }
+    let _ = fs::remove_file(error_path);
+    let details = details
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .last()
+        .unwrap_or_default()
+        .trim();
+    if !details.is_empty() {
+        format!("mpv could not start audio: {details}")
+    } else if let Some(status) = status {
+        format!("mpv exited before audio started ({status})")
+    } else {
+        "mpv did not start audio within 8 seconds".to_string()
+    }
+}
+
+fn wait_for_player_start(
+    player: &mut std::process::Child,
+    ipc_path: &Path,
+    error_path: &Path,
+) -> Result<(), String> {
+    for _ in 0..80 {
+        if let Some(status) = player.try_wait().map_err(|error| error.to_string())? {
+            return Err(mpv_startup_failure(Some(status), error_path));
+        }
+        if ipc_path.exists()
+            && mpv_ipc_command(ipc_path, json!(["get_property", "audio-params"]))
+                .ok()
+                .and_then(|payload| payload.get("data").cloned())
+                .is_some_and(|data| !data.is_null())
+        {
+            let _ = fs::remove_file(error_path);
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let _ = player.kill();
+    let status = player.wait().ok();
+    let _ = fs::remove_file(ipc_path);
+    Err(mpv_startup_failure(status, error_path))
 }
 
 #[tauri::command]
