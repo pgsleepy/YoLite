@@ -70,6 +70,18 @@ Build native packages with:
 npm run desktop:build
 ```
 
+### Install and update on Linux
+
+GitHub Releases provide a signed AppImage. AppImage installs can check for updates in Settings, verify the release signature, replace the application, and restart without a Yolite server.
+
+Arch Linux and CachyOS users can install the `yolite-bin` AUR package once it is published:
+
+```bash
+paru -S yolite-bin
+```
+
+That package installs Yolite under `/opt` and deliberately leaves updates to pacman and the AUR helper (`paru -Syu` or `yay -Syu`). Package-managed files are never overwritten by the in-app updater.
+
 ### Browser prototype
 
 ```bash
@@ -156,6 +168,7 @@ The Rust backend is split by ownership so changes stay focused and reviewable:
 - `src-tauri/src/playback.rs` owns `mpv`, `yt-dlp`, equalizer, and visualizer telemetry.
 - `src-tauri/src/servers.rs` owns loopback streaming and the phone controller server.
 - `src-tauri/src/desktop.rs`, `discord.rs`, `plugins.rs`, and `remote.rs` contain their named integrations.
+- `src-tauri/src/updater.rs` owns signed release checks and installation policy.
 - `public/app.js` coordinates the interface.
 - `public/visualizer.js` owns the WebGL renderer.
 - `src/server.js` supports the local browser prototype.
@@ -176,6 +189,8 @@ npm run test:e2e
 ```
 
 Keep commits narrow and independently buildable. Separate structural refactors, behavior changes, and documentation when practical.
+
+Release maintainers should follow [the signing and publishing guide](docs/RELEASING.md). Releases and update metadata are hosted entirely by GitHub; the project does not require a separate update server.
 
 ## Privacy and security
 
