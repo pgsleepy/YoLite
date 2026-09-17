@@ -46,6 +46,7 @@ jobs:
 
       - name: Test
         run: |
+          sh -n install.sh
           npm run test:e2e
           cargo test --manifest-path src-tauri/Cargo.toml
 

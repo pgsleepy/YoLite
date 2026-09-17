@@ -74,6 +74,14 @@ npm run desktop:build
 
 GitHub Releases provide a signed AppImage. AppImage installs can check for updates in Settings, verify the release signature, replace the application, and restart without a Yolite server.
 
+Install the latest release for the current user with one command:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/pgsleepy/YoLite/main/install.sh | sh
+```
+
+The installer verifies the AppImage against GitHub's published SHA-256 digest, then installs it under `~/.local/opt/yolite`. It also creates `~/.local/bin/yolite`, an application-menu entry, and an icon. It does not require root access. On Arch/CachyOS, install `fuse2` if AppImages are not already supported.
+
 Arch Linux and CachyOS users can install the `yolite-bin` AUR package once it is published:
 
 ```bash
