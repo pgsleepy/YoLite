@@ -1457,8 +1457,9 @@ input[type="range"] {
   z-index: 0;
   width: calc(100vw - 212px);
   height: calc(100dvh - var(--header-height) - var(--player-height));
+  contain: strict;
   pointer-events: none;
-  opacity: 0.46;
+  opacity: 0.62;
 }
 
 .visualizer[hidden] {

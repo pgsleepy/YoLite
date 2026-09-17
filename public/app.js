@@ -1,6 +1,8 @@
+import { createVisualizer } from "./visualizer.js";
+
 const audio = document.querySelector("#audio");
 const visualizer = document.querySelector("#visualizer");
-const visualizerContext = visualizer.getContext("2d");
+const visualizerRenderer = createVisualizer(visualizer);
 const splash = document.querySelector("#splash");
 const shell = document.querySelector("#shell");
 const searchForm = document.querySelector("#searchForm");
@@ -131,6 +133,12 @@ let listenAgainPage = 0;
 let miniPlayer = false;
 let loginPollTimer = 0;
 let pluginCategories = [];
+let visualizerFrame = 0;
+let visualizerLastFrame = 0;
+let visualizerAnalyserData = null;
+let nativeVisualizerRequest = false;
+let nativeVisualizerUpdatedAt = 0;
+let nativeVisualizerLevels = { bass: 0, mids: 0, treble: 0, energy: 0, peak: 0 };
 
 const defaultHotkeys = {
   playPause: "Ctrl+Alt+Space",
@@ -1377,6 +1385,7 @@ async function playTrack(track, options = {}) {
         volume: Number(volume.value),
         fadeIn: shouldFadeTransition(options.reason) ? crossfadeSeconds() : 0,
         equalizer: currentEqualizer(),
+        visualizerEnabled: visualizerEnabled.checked && visualizerRenderer.available,
         title: track.title || "",
         artist: track.artist || ""
       });
@@ -1434,6 +1443,7 @@ function syncPlayButton() {
   const playing = isTauri ? nativePlaying && !nativePaused : !audio.paused;
   playShape.className = playing ? "pause-shape" : "play-shape";
   playBtn.setAttribute("aria-label", playing ? "Pause" : "Play");
+  syncVisualizerAnimation();
 }
 
 function syncLoopButton() {
@@ -1486,52 +1496,76 @@ function syncRemoteState() {
   }).catch(() => {});
 }
 
-function drawVisualizer(time) {
-  requestAnimationFrame(drawVisualizer);
-  if (!visualizerEnabled?.checked || visualizer.hidden) return;
-  const rect = visualizer.getBoundingClientRect();
-  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-  const width = Math.max(1, Math.floor(rect.width * pixelRatio));
-  const height = Math.max(1, Math.floor(rect.height * pixelRatio));
-  if (visualizer.width !== width || visualizer.height !== height) {
-    visualizer.width = width;
-    visualizer.height = height;
+function browserVisualizerLevels() {
+  if (!audioAnalyser || audio.paused) {
+    return { bass: 0, mids: 0, treble: 0, energy: 0, peak: 0 };
   }
-  visualizerContext.clearRect(0, 0, width, height);
-  let bass = 0.08;
-  let mids = 0.08;
-  if (audioAnalyser && !audio.paused) {
-    const data = new Uint8Array(audioAnalyser.frequencyBinCount);
-    audioAnalyser.getByteFrequencyData(data);
-    bass = data.slice(0, 9).reduce((sum, value) => sum + value, 0) / (9 * 255);
-    mids = data.slice(9, 30).reduce((sum, value) => sum + value, 0) / (21 * 255);
-  } else if (nativePlaying && !nativePaused) {
-    bass = 0.22 + Math.sin(time / 230) * 0.08 + Math.sin(time / 83) * 0.035;
-    mids = 0.17 + Math.sin(time / 410 + 1.7) * 0.06;
+  if (!visualizerAnalyserData || visualizerAnalyserData.length !== audioAnalyser.frequencyBinCount) {
+    visualizerAnalyserData = new Uint8Array(audioAnalyser.frequencyBinCount);
   }
-  const energy = Math.max(0.04, Math.min(0.72, bass * 0.75 + mids * 0.35));
-  const colors = ["211,138,100", "154,95,83", "112,76,70"];
-  visualizerContext.lineCap = "round";
-  colors.forEach((color, layer) => {
-    const baseline = height * (0.58 + layer * 0.09);
-    const amplitude = height * (0.018 + energy * (0.065 - layer * 0.012));
-    visualizerContext.beginPath();
-    for (let x = 0; x <= width; x += Math.max(5, width / 170)) {
-      const progress = x / width;
-      const envelope = Math.sin(progress * Math.PI);
-      const y = baseline
-        + Math.sin(progress * Math.PI * (3.2 + layer) + time / (850 - layer * 130)) * amplitude * envelope
-        + Math.sin(progress * Math.PI * 9 + time / 330) * amplitude * 0.24 * envelope;
-      if (x === 0) visualizerContext.moveTo(x, y);
-      else visualizerContext.lineTo(x, y);
+  audioAnalyser.getByteFrequencyData(visualizerAnalyserData);
+
+  const average = (start, end) => {
+    let total = 0;
+    for (let index = start; index < Math.min(end, visualizerAnalyserData.length); index += 1) {
+      total += visualizerAnalyserData[index];
     }
-    visualizerContext.strokeStyle = `rgba(${color},${0.08 + energy * 0.14})`;
-    visualizerContext.lineWidth = (38 - layer * 9) * pixelRatio;
-    visualizerContext.shadowBlur = 35 * pixelRatio;
-    visualizerContext.shadowColor = `rgba(${color},${0.1 + energy * 0.12})`;
-    visualizerContext.stroke();
-  });
-  visualizerContext.shadowBlur = 0;
+    return total / (Math.max(1, Math.min(end, visualizerAnalyserData.length) - start) * 255);
+  };
+  let peak = 0;
+  for (const value of visualizerAnalyserData) peak = Math.max(peak, value / 255);
+  const bass = average(0, 9);
+  const mids = average(9, 30);
+  const treble = average(30, visualizerAnalyserData.length);
+  return {
+    bass,
+    mids,
+    treble,
+    energy: Math.min(1, bass * 0.55 + mids * 0.32 + treble * 0.13),
+    peak,
+  };
+}
+
+function pollNativeVisualizer(time) {
+  if (!isTauri || nativeVisualizerRequest || time - nativeVisualizerUpdatedAt < 80) return;
+  nativeVisualizerRequest = true;
+  nativeVisualizerUpdatedAt = time;
+  window.__TAURI__.core.invoke("get_native_visualizer")
+    .then(levels => {
+      nativeVisualizerLevels = levels;
+    })
+    .catch(() => {
+      nativeVisualizerLevels = { bass: 0, mids: 0, treble: 0, energy: 0, peak: 0 };
+    })
+    .finally(() => {
+      nativeVisualizerRequest = false;
+    });
+}
+
+function drawVisualizer(time) {
+  visualizerFrame = requestAnimationFrame(drawVisualizer);
+  if (time - visualizerLastFrame < 1000 / 30) return;
+  visualizerLastFrame = time;
+
+  if (isTauri) pollNativeVisualizer(time);
+  visualizerRenderer.render(time, isTauri ? nativeVisualizerLevels : browserVisualizerLevels());
+}
+
+function syncVisualizerAnimation() {
+  const playing = isTauri ? nativePlaying && !nativePaused : !audio.paused;
+  const active = visualizerRenderer.available
+    && visualizerEnabled?.checked
+    && !visualizer.hidden
+    && playing
+    && !document.hidden;
+  if (active && !visualizerFrame) {
+    visualizerLastFrame = 0;
+    visualizerFrame = requestAnimationFrame(drawVisualizer);
+  } else if (!active && visualizerFrame) {
+    cancelAnimationFrame(visualizerFrame);
+    visualizerFrame = 0;
+    visualizerRenderer.clear();
+  }
 }
 
 function hotkeySettings() {
@@ -1945,7 +1979,13 @@ volumeNormalization.addEventListener("change", () => {
 visualizerEnabled.addEventListener("change", () => {
   localStorage.setItem("yolite:visualizer", JSON.stringify(visualizerEnabled.checked));
   visualizer.hidden = !visualizerEnabled.checked;
+  if (isTauri) {
+    const enabled = visualizerEnabled.checked && visualizerRenderer.available;
+    window.__TAURI__.core.invoke("set_native_visualizer", { enabled }).catch(() => {});
+  }
+  syncVisualizerAnimation();
 });
+document.addEventListener("visibilitychange", syncVisualizerAnimation);
 hotkeyInputs.forEach(input => input.addEventListener("change", registerHotkeys));
 resetHotkeys.addEventListener("click", () => {
   localStorage.setItem("yolite:hotkeys", JSON.stringify(defaultHotkeys));
@@ -2237,7 +2277,7 @@ renderResults();
 renderHistory();
 syncLoopButton();
 renderHotkeys();
-requestAnimationFrame(drawVisualizer);
+syncVisualizerAnimation();
 
 function hideSplash() {
   splash.classList.add("done");

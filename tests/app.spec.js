@@ -226,5 +226,6 @@ test("settings owns session and performance controls", async ({ page }) => {
   await expect(page.locator("#prefetchCount")).toHaveAttribute("max", "50");
   await expect(page.locator("#volumeNormalization")).toBeVisible();
   await expect(page.locator("#visualizerEnabled")).toBeChecked();
+  await expect(page.locator("#visualizer")).toHaveAttribute("data-renderer", "webgl");
   await expect(page.locator('[data-hotkey="playPause"]')).toHaveValue("Ctrl+Alt+Space");
 });
