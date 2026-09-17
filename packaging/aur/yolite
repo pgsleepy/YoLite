@@ -1,0 +1,3 @@
+#!/bin/sh
+export YOLITE_UPDATE_MODE=package-manager
+exec /opt/yolite/Yolite.AppImage "$@"

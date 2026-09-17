@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify release version
+        id: metadata
+        run: |
+          config_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            test "v${config_version}" = "${GITHUB_REF_NAME}"
+          fi
+          echo "tag=v${config_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Test
+        run: |
+          npm run test:e2e
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build and publish signed AppImage
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_STRIP: "true"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Yolite v__VERSION__
+          releaseBody: See the assets below to install or update Yolite.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          args: --bundles appimage
+
+  aur:
+    needs: release
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check AUR credentials
+        id: aur
+        shell: bash
+        run: |
+          if [[ -n "${AUR_SSH_PRIVATE_KEY}" ]]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "AUR_SSH_PRIVATE_KEY is not configured; skipping AUR publication."
+          fi
+
+      - name: Install publishing tools
+        if: steps.aur.outputs.enabled == 'true'
+        run: pacman -Syu --noconfirm git github-cli openssh
+
+      - uses: actions/checkout@v4
+        if: steps.aur.outputs.enabled == 'true'
+
+      - name: Download AppImage and calculate checksum
+        if: steps.aur.outputs.enabled == 'true'
+        id: appimage
+        shell: bash
+        run: |
+          mkdir release-assets
+          gh release download "${RELEASE_TAG}" --pattern '*.AppImage' --dir release-assets
+          mapfile -t appimages < <(find release-assets -maxdepth 1 -type f -name '*.AppImage')
+          test "${#appimages[@]}" -eq 1
+          echo "sha256=$(sha256sum "${appimages[0]}" | cut -d ' ' -f 1)" >> "${GITHUB_OUTPUT}"
+        env:
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+
+      - name: Publish yolite-bin
+        if: steps.aur.outputs.enabled == 'true'
+        shell: bash
+        env:
+          APPIMAGE_SHA256: ${{ steps.appimage.outputs.sha256 }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/aur -o IdentitiesOnly=yes'
+          git clone ssh://aur@aur.archlinux.org/yolite-bin.git aur-package
+          cp packaging/aur/PKGBUILD packaging/aur/yolite packaging/aur/yolite.desktop aur-package/
+          cp src-tauri/icons/icon.png aur-package/yolite.png
+          pkgver="${RELEASE_TAG#v}"
+          sed -i "s/__VERSION__/${pkgver}/g; s/__APPIMAGE_SHA256__/${APPIMAGE_SHA256}/g" aur-package/PKGBUILD
+          cd aur-package
+          makepkg --printsrcinfo > .SRCINFO
+          git add PKGBUILD .SRCINFO yolite yolite.desktop yolite.png
+          git config user.name 'Yolite Release Bot'
+          git config user.email 'actions@github.com'
+          git commit -m "yolite-bin ${pkgver}"
+          git push origin master

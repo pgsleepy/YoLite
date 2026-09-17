@@ -1,0 +1,26 @@
+pkgname=yolite-bin
+pkgver=__VERSION__
+pkgrel=1
+pkgdesc='Lightweight YouTube Music desktop client (prebuilt AppImage)'
+arch=('x86_64')
+url='https://github.com/pgsleepy/YoLite'
+license=('MIT')
+depends=('fuse2' 'mpv')
+provides=('yolite')
+conflicts=('yolite')
+options=('!strip')
+source=("${pkgname}-${pkgver}.AppImage::${url}/releases/download/v${pkgver}/Yolite_${pkgver}_amd64.AppImage"
+        'yolite'
+        'yolite.desktop'
+        'yolite.png')
+sha256sums=('__APPIMAGE_SHA256__'
+            'b6cfd2e0ff2e1762563dcc183aaa29648fc8d89f695a3d2932e156dccf9f2370'
+            '955ba30f68baa93a092538383b7682f4cc97424c48c7e23222b31cb171d74f98'
+            'c6ce8c2ee189375cef66356cb983338584058b6ecd7b9c9f6895d32b37ff3553')
+
+package() {
+  install -Dm755 "${srcdir}/${pkgname}-${pkgver}.AppImage" "${pkgdir}/opt/yolite/Yolite.AppImage"
+  install -Dm755 yolite "${pkgdir}/usr/bin/yolite"
+  install -Dm644 yolite.desktop "${pkgdir}/usr/share/applications/yolite.desktop"
+  install -Dm644 yolite.png "${pkgdir}/usr/share/pixmaps/yolite.png"
+}
