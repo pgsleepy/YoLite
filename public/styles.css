@@ -887,6 +887,39 @@ h1 {
   accent-color: var(--accent);
 }
 
+.visualizer-colors {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.visualizer-colors label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.visualizer-colors input {
+  width: 100%;
+  height: 38px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.visualizer-colors input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.visualizer-colors input::-webkit-color-swatch {
+  border: 0;
+  border-radius: 5px;
+}
+
 .library-section {
   display: grid;
   gap: 10px;

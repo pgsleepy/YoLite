@@ -58,6 +58,12 @@ const discordPresence = document.querySelector("#discordPresence");
 const discordPresenceRow = document.querySelector("#discordPresenceRow");
 const volumeNormalization = document.querySelector("#volumeNormalization");
 const visualizerEnabled = document.querySelector("#visualizerEnabled");
+const visualizerFps = document.querySelector("#visualizerFps");
+const visualizerFpsValue = document.querySelector("#visualizerFpsValue");
+const visualizerBassColor = document.querySelector("#visualizerBassColor");
+const visualizerMidsColor = document.querySelector("#visualizerMidsColor");
+const visualizerTrebleColor = document.querySelector("#visualizerTrebleColor");
+const resetVisualizer = document.querySelector("#resetVisualizer");
 const prefetchCount = document.querySelector("#prefetchCount");
 const prefetchCountValue = document.querySelector("#prefetchCountValue");
 const cacheLimit = document.querySelector("#cacheLimit");
@@ -139,6 +145,7 @@ let visualizerAnalyserData = null;
 let nativeVisualizerRequest = false;
 let nativeVisualizerUpdatedAt = 0;
 let nativeVisualizerLevels = { bass: 0, mids: 0, treble: 0, energy: 0, peak: 0 };
+let visualizerTargetFps = 30;
 
 const defaultHotkeys = {
   playPause: "Ctrl+Alt+Space",
@@ -146,6 +153,13 @@ const defaultHotkeys = {
   previous: "Ctrl+Alt+ArrowLeft",
   volumeUp: "Ctrl+Alt+ArrowUp",
   volumeDown: "Ctrl+Alt+ArrowDown"
+};
+
+const defaultVisualizerSettings = {
+  fps: 30,
+  bass: "#d46e42",
+  mids: "#994033",
+  treble: "#572929",
 };
 
 const equalizerBands = [
@@ -233,6 +247,36 @@ function storedJson(key, fallback) {
     return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
   } catch {
     return fallback;
+  }
+}
+
+function visualizerSettings() {
+  return {
+    fps: Number(visualizerFps.value) || defaultVisualizerSettings.fps,
+    bass: visualizerBassColor.value,
+    mids: visualizerMidsColor.value,
+    treble: visualizerTrebleColor.value,
+  };
+}
+
+function applyVisualizerSettings(settings, save = true) {
+  const allowedFrameRates = [15, 30, 60, 120];
+  const fps = allowedFrameRates.includes(Number(settings?.fps))
+    ? Number(settings.fps)
+    : defaultVisualizerSettings.fps;
+  const color = (value, fallback) => /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+  visualizerFps.value = String(fps);
+  visualizerTargetFps = fps;
+  visualizerBassColor.value = color(settings?.bass, defaultVisualizerSettings.bass);
+  visualizerMidsColor.value = color(settings?.mids, defaultVisualizerSettings.mids);
+  visualizerTrebleColor.value = color(settings?.treble, defaultVisualizerSettings.treble);
+  visualizerFpsValue.textContent = `${fps} FPS`;
+  visualizer.dataset.fps = String(fps);
+  visualizerRenderer.setColors(visualizerSettings());
+  visualizerLastFrame = 0;
+  if (save) {
+    localStorage.setItem("yolite:visualizerSettings", JSON.stringify(visualizerSettings()));
+    settingsState.textContent = "Saved locally";
   }
 }
 
@@ -1544,7 +1588,7 @@ function pollNativeVisualizer(time) {
 
 function drawVisualizer(time) {
   visualizerFrame = requestAnimationFrame(drawVisualizer);
-  if (time - visualizerLastFrame < 1000 / 30) return;
+  if (time - visualizerLastFrame + 0.5 < 1000 / visualizerTargetFps) return;
   visualizerLastFrame = time;
 
   if (isTauri) pollNativeVisualizer(time);
@@ -1985,6 +2029,11 @@ visualizerEnabled.addEventListener("change", () => {
   }
   syncVisualizerAnimation();
 });
+visualizerFps.addEventListener("change", () => applyVisualizerSettings(visualizerSettings()));
+[visualizerBassColor, visualizerMidsColor, visualizerTrebleColor].forEach(input => {
+  input.addEventListener("input", () => applyVisualizerSettings(visualizerSettings()));
+});
+resetVisualizer.addEventListener("click", () => applyVisualizerSettings(defaultVisualizerSettings));
 document.addEventListener("visibilitychange", syncVisualizerAnimation);
 hotkeyInputs.forEach(input => input.addEventListener("change", registerHotkeys));
 resetHotkeys.addEventListener("click", () => {
@@ -2268,6 +2317,7 @@ discordPresence.checked = storedJson("yolite:discordPresence", true);
 volumeNormalization.checked = storedJson("yolite:volumeNormalization", false);
 visualizerEnabled.checked = storedJson("yolite:visualizer", true);
 visualizer.hidden = !visualizerEnabled.checked;
+applyVisualizerSettings(storedJson("yolite:visualizerSettings", defaultVisualizerSettings), false);
 loopMode = ["off", "all", "one"].includes(localStorage.getItem("yolite:loopMode"))
   ? localStorage.getItem("yolite:loopMode")
   : "off";

@@ -13,6 +13,9 @@ const FRAGMENT_SHADER = `
   uniform float time;
   uniform vec4 levels;
   uniform float peak;
+  uniform vec3 paletteLow;
+  uniform vec3 paletteMid;
+  uniform vec3 paletteHigh;
 
   float waveGlow(vec2 point, float baseline, float frequency, float speed, float amplitude, float width) {
     float envelope = sin(point.x * 3.14159265);
@@ -35,9 +38,9 @@ const FRAGMENT_SHADER = `
     float middle = waveGlow(point, 0.50, 15.0, -1.05, 0.025 + mids * 0.14, 0.060 + mids * 0.035);
     float high = waveGlow(point, 0.62, 24.0, 1.8, 0.018 + treble * 0.10, 0.042 + treble * 0.025);
 
-    vec3 lowColor = vec3(0.83, 0.43, 0.26) * low * (0.30 + bass * 0.95);
-    vec3 midColor = vec3(0.60, 0.25, 0.20) * middle * (0.24 + mids * 0.82);
-    vec3 highColor = vec3(0.34, 0.16, 0.15) * high * (0.20 + treble * 0.75);
+    vec3 lowColor = paletteLow * low * (0.30 + bass * 0.95);
+    vec3 midColor = paletteMid * middle * (0.24 + mids * 0.82);
+    vec3 highColor = paletteHigh * high * (0.20 + treble * 0.75);
     vec3 color = (lowColor + midColor + highColor) * pulse;
     float alpha = clamp((low + middle + high) * (0.10 + energy * 0.34), 0.0, 0.72);
 
@@ -46,6 +49,20 @@ const FRAGMENT_SHADER = `
 `;
 
 const LEVEL_KEYS = ["bass", "mids", "treble", "energy", "peak"];
+const DEFAULT_COLORS = {
+  bass: "#d46e42",
+  mids: "#994033",
+  treble: "#572929",
+};
+
+function rgbFromHex(value, fallback) {
+  const hex = /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+  return new Float32Array([
+    Number.parseInt(hex.slice(1, 3), 16) / 255,
+    Number.parseInt(hex.slice(3, 5), 16) / 255,
+    Number.parseInt(hex.slice(5, 7), 16) / 255,
+  ]);
+}
 
 function compileShader(gl, type, source) {
   const shader = gl.createShader(type);
@@ -93,6 +110,7 @@ export function createVisualizer(canvas) {
       available: false,
       clear() {},
       render() {},
+      setColors() {},
     };
   }
 
@@ -110,8 +128,16 @@ export function createVisualizer(canvas) {
     time: gl.getUniformLocation(program, "time"),
     levels: gl.getUniformLocation(program, "levels"),
     peak: gl.getUniformLocation(program, "peak"),
+    paletteLow: gl.getUniformLocation(program, "paletteLow"),
+    paletteMid: gl.getUniformLocation(program, "paletteMid"),
+    paletteHigh: gl.getUniformLocation(program, "paletteHigh"),
   };
   const current = { bass: 0, mids: 0, treble: 0, energy: 0, peak: 0 };
+  let palette = {
+    bass: rgbFromHex(DEFAULT_COLORS.bass, DEFAULT_COLORS.bass),
+    mids: rgbFromHex(DEFAULT_COLORS.mids, DEFAULT_COLORS.mids),
+    treble: rgbFromHex(DEFAULT_COLORS.treble, DEFAULT_COLORS.treble),
+  };
   let contextLost = false;
   canvas.dataset.renderer = "webgl";
 
@@ -140,6 +166,14 @@ export function createVisualizer(canvas) {
     gl.clear(gl.COLOR_BUFFER_BIT);
   }
 
+  function setColors(colors) {
+    palette = {
+      bass: rgbFromHex(colors?.bass, DEFAULT_COLORS.bass),
+      mids: rgbFromHex(colors?.mids, DEFAULT_COLORS.mids),
+      treble: rgbFromHex(colors?.treble, DEFAULT_COLORS.treble),
+    };
+  }
+
   function render(timestamp, target) {
     if (contextLost) return;
     resize();
@@ -155,8 +189,11 @@ export function createVisualizer(canvas) {
     gl.uniform1f(uniforms.time, timestamp / 1000);
     gl.uniform4f(uniforms.levels, current.bass, current.mids, current.treble, current.energy);
     gl.uniform1f(uniforms.peak, current.peak);
+    gl.uniform3fv(uniforms.paletteLow, palette.bass);
+    gl.uniform3fv(uniforms.paletteMid, palette.mids);
+    gl.uniform3fv(uniforms.paletteHigh, palette.treble);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  return { available: true, clear, render };
+  return { available: true, clear, render, setColors };
 }

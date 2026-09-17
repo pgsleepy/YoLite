@@ -229,3 +229,21 @@ test("settings owns session and performance controls", async ({ page }) => {
   await expect(page.locator("#visualizer")).toHaveAttribute("data-renderer", "webgl");
   await expect(page.locator('[data-hotkey="playPause"]')).toHaveValue("Ctrl+Alt+Space");
 });
+
+test("visualizer frame rate and colors persist", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  await page.locator("#visualizerFps").selectOption("60");
+  await page.locator("#visualizerBassColor").fill("#336699");
+  await page.locator("#visualizerMidsColor").fill("#8844aa");
+  await page.locator("#visualizerTrebleColor").fill("#22aa88");
+
+  await expect(page.locator("#visualizerFpsValue")).toHaveText("60 FPS");
+  await expect(page.locator("#visualizer")).toHaveAttribute("data-fps", "60");
+  await page.reload();
+  await expect(page.locator("#visualizerFps")).toHaveValue("60");
+  await expect(page.locator("#visualizerBassColor")).toHaveValue("#336699");
+  await expect(page.locator("#visualizerMidsColor")).toHaveValue("#8844aa");
+  await expect(page.locator("#visualizerTrebleColor")).toHaveValue("#22aa88");
+});

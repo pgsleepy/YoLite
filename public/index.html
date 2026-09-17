@@ -168,10 +168,40 @@
                 <input id="volumeNormalization" type="checkbox">
                 <span>Volume normalization</span>
               </label>
+            </section>
+            <section class="settings-section">
+              <div class="settings-heading">
+                <h2>Visualizer</h2>
+                <button id="resetVisualizer" class="ghost small" type="button">Reset</button>
+              </div>
               <label class="setting-check">
                 <input id="visualizerEnabled" type="checkbox" checked>
                 <span>Background visualizer</span>
               </label>
+              <label class="setting-row">
+                <span>Frame rate</span>
+                <select id="visualizerFps">
+                  <option value="15">15 FPS · Saver</option>
+                  <option value="30" selected>30 FPS · Balanced</option>
+                  <option value="60">60 FPS · Smooth</option>
+                  <option value="120">120 FPS · High refresh</option>
+                </select>
+                <output id="visualizerFpsValue">30 FPS</output>
+              </label>
+              <div class="visualizer-colors" role="group" aria-label="Visualizer colors">
+                <label>
+                  <span>Bass</span>
+                  <input id="visualizerBassColor" type="color" value="#d46e42">
+                </label>
+                <label>
+                  <span>Mids</span>
+                  <input id="visualizerMidsColor" type="color" value="#994033">
+                </label>
+                <label>
+                  <span>Highs</span>
+                  <input id="visualizerTrebleColor" type="color" value="#572929">
+                </label>
+              </div>
             </section>
             <section class="settings-section">
               <div class="settings-heading">
