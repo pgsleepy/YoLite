@@ -1515,6 +1515,12 @@ async function playTrack(track, options = {}) {
     prefetchUpcomingTracks();
   } catch (error) {
     if (requestId !== playRequestId) return;
+    if (isTauri) {
+      nativePlaying = false;
+      nativePaused = false;
+      stopNativeProgress();
+      syncPlayButton();
+    }
     if (!fallbackUrl) {
       setStatus(errorMessage(error, "Playback failed"));
       return;

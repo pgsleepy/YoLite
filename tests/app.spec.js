@@ -264,6 +264,37 @@ test("desktop update controls expose signed release updates", async ({ page }) =
   await expect.poll(() => page.evaluate(() => window.__updateCommands)).toContain("install_update");
 });
 
+test("native playback failure restores the play control", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__playbackCommands = [];
+    window.__TAURI__ = {
+      core: {
+        invoke: async (command) => {
+          window.__playbackCommands.push(command);
+          if (command === "get_home") {
+            return {
+              sections: [{
+                title: "Quick picks",
+                tracks: [{ id: "failed-track", title: "Failed track", artist: "Test artist" }],
+              }],
+            };
+          }
+          if (command === "get_mix") return { tracks: [] };
+          if (command === "search_tracks") return { results: [] };
+          if (command === "play_track_native") throw new Error("mpv failed to start");
+          return {};
+        },
+      },
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Failed track/ }).first().click();
+
+  await expect.poll(() => page.evaluate(() => window.__playbackCommands)).toContain("play_track_native");
+  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+});
+
 test("visualizer frame rate and colors persist", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
