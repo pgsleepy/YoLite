@@ -10,18 +10,19 @@ const FRAGMENT_SHADER = `
   precision mediump float;
 
   uniform vec2 resolution;
-  uniform float time;
   uniform vec4 levels;
   uniform float peak;
+  uniform vec3 primaryPhase;
+  uniform vec3 detailPhase;
   uniform vec3 paletteLow;
   uniform vec3 paletteMid;
   uniform vec3 paletteHigh;
 
-  float waveGlow(vec2 point, float baseline, float frequency, float speed, float amplitude, float width) {
+  float waveGlow(vec2 point, float baseline, float frequency, float phase, float detail, float amplitude, float width) {
     float envelope = sin(point.x * 3.14159265);
-    float primary = sin(point.x * frequency + time * speed);
-    float detail = sin(point.x * frequency * 2.7 - time * speed * 1.4) * 0.24;
-    float wave = baseline + (primary + detail) * amplitude * envelope;
+    float primary = sin(point.x * frequency + phase);
+    float texture = sin(point.x * frequency * 2.7 + detail) * 0.24;
+    float wave = baseline + (primary + texture) * amplitude * envelope;
     float distanceToWave = abs(point.y - wave);
     return smoothstep(width, 0.0, distanceToWave);
   }
@@ -34,9 +35,9 @@ const FRAGMENT_SHADER = `
     float energy = levels.w;
     float pulse = 0.65 + peak * 0.65;
 
-    float low = waveGlow(point, 0.38, 9.5, 1.35, 0.035 + bass * 0.19, 0.085 + bass * 0.055);
-    float middle = waveGlow(point, 0.50, 15.0, -1.05, 0.025 + mids * 0.14, 0.060 + mids * 0.035);
-    float high = waveGlow(point, 0.62, 24.0, 1.8, 0.018 + treble * 0.10, 0.042 + treble * 0.025);
+    float low = waveGlow(point, 0.38, 9.5, primaryPhase.x, detailPhase.x, 0.035 + bass * 0.19, 0.085 + bass * 0.055);
+    float middle = waveGlow(point, 0.50, 15.0, primaryPhase.y, detailPhase.y, 0.025 + mids * 0.14, 0.060 + mids * 0.035);
+    float high = waveGlow(point, 0.62, 24.0, primaryPhase.z, detailPhase.z, 0.018 + treble * 0.10, 0.042 + treble * 0.025);
 
     vec3 lowColor = paletteLow * low * (0.30 + bass * 0.95);
     vec3 midColor = paletteMid * middle * (0.24 + mids * 0.82);
@@ -44,11 +45,13 @@ const FRAGMENT_SHADER = `
     vec3 color = (lowColor + midColor + highColor) * pulse;
     float alpha = clamp((low + middle + high) * (0.10 + energy * 0.34), 0.0, 0.72);
 
-    gl_FragColor = vec4(color, alpha);
+    gl_FragColor = vec4(color * alpha, alpha);
   }
 `;
 
 const LEVEL_KEYS = ["bass", "mids", "treble", "energy", "peak"];
+const TAU = Math.PI * 2;
+const WAVE_SPEEDS = [1.35, -1.05, 1.8];
 const DEFAULT_COLORS = {
   bass: "#d46e42",
   mids: "#994033",
@@ -62,6 +65,21 @@ function rgbFromHex(value, fallback) {
     Number.parseInt(hex.slice(3, 5), 16) / 255,
     Number.parseInt(hex.slice(5, 7), 16) / 255,
   ]);
+}
+
+function fillVisualizerPhases(timestamp, primary, detail) {
+  const seconds = Math.max(0, Number(timestamp) || 0) / 1000;
+  for (let index = 0; index < WAVE_SPEEDS.length; index += 1) {
+    primary[index] = (seconds * WAVE_SPEEDS[index]) % TAU;
+    detail[index] = (seconds * WAVE_SPEEDS[index] * -1.4) % TAU;
+  }
+}
+
+export function visualizerPhases(timestamp) {
+  const primary = new Float32Array(3);
+  const detail = new Float32Array(3);
+  fillVisualizerPhases(timestamp, primary, detail);
+  return { primary, detail };
 }
 
 function compileShader(gl, type, source) {
@@ -125,14 +143,17 @@ export function createVisualizer(canvas) {
 
   const uniforms = {
     resolution: gl.getUniformLocation(program, "resolution"),
-    time: gl.getUniformLocation(program, "time"),
     levels: gl.getUniformLocation(program, "levels"),
     peak: gl.getUniformLocation(program, "peak"),
+    primaryPhase: gl.getUniformLocation(program, "primaryPhase"),
+    detailPhase: gl.getUniformLocation(program, "detailPhase"),
     paletteLow: gl.getUniformLocation(program, "paletteLow"),
     paletteMid: gl.getUniformLocation(program, "paletteMid"),
     paletteHigh: gl.getUniformLocation(program, "paletteHigh"),
   };
   const current = { bass: 0, mids: 0, treble: 0, energy: 0, peak: 0 };
+  const primaryPhase = new Float32Array(3);
+  const detailPhase = new Float32Array(3);
   let palette = {
     bass: rgbFromHex(DEFAULT_COLORS.bass, DEFAULT_COLORS.bass),
     mids: rgbFromHex(DEFAULT_COLORS.mids, DEFAULT_COLORS.mids),
@@ -185,10 +206,12 @@ export function createVisualizer(canvas) {
 
     clear();
     gl.useProgram(program);
+    fillVisualizerPhases(timestamp, primaryPhase, detailPhase);
     gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
-    gl.uniform1f(uniforms.time, timestamp / 1000);
     gl.uniform4f(uniforms.levels, current.bass, current.mids, current.treble, current.energy);
     gl.uniform1f(uniforms.peak, current.peak);
+    gl.uniform3fv(uniforms.primaryPhase, primaryPhase);
+    gl.uniform3fv(uniforms.detailPhase, detailPhase);
     gl.uniform3fv(uniforms.paletteLow, palette.bass);
     gl.uniform3fv(uniforms.paletteMid, palette.mids);
     gl.uniform3fv(uniforms.paletteHigh, palette.treble);

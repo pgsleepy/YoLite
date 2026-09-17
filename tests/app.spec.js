@@ -247,3 +247,14 @@ test("visualizer frame rate and colors persist", async ({ page }) => {
   await expect(page.locator("#visualizerMidsColor")).toHaveValue("#8844aa");
   await expect(page.locator("#visualizerTrebleColor")).toHaveValue("#22aa88");
 });
+
+test("visualizer phases stay bounded during long playback", async ({ page }) => {
+  await page.goto("/");
+  const phases = await page.evaluate(async () => {
+    const { visualizerPhases } = await import("/visualizer.js");
+    const result = visualizerPhases(24 * 60 * 60 * 1000);
+    return [...result.primary, ...result.detail];
+  });
+
+  expect(phases.every(value => Number.isFinite(value) && Math.abs(value) <= Math.PI * 2)).toBe(true);
+});
