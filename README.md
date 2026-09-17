@@ -1,111 +1,129 @@
 # Yolite
 
-A lightweight YouTube Music client that avoids Electron. It can run as a native Tauri/WebKitGTK desktop app, with a local browser prototype kept for quick testing.
+Yolite is a lightweight, open-source YouTube Music desktop client built with Tauri, Rust, and the system webview. It keeps the familiar parts of a full music client—personalized shelves, library access, playlists, queue management, native playback, global controls, and a reactive visualizer—without shipping Electron.
 
-## What Works
+> Yolite is an unofficial client and is not affiliated with YouTube or Google.
 
-- YouTube Music song search through `ytmusic-api`
-- Native desktop shell through Tauri/WebKitGTK
-- Node-free desktop backend through `rs-ytmusic-api`
-- Cookie-backed account session storage for logged-in Library and age-restricted playback
-- Library tab with Liked Music and personalized YouTube Music sections when cookies are saved
-- Audio playback through `yt-dlp`
-- Desktop loopback stream fallback when direct media URLs fail in the webview
-- Queue, previous/next, progress, seek, volume, and compact responsive UI
-- Global configurable playback hotkeys and compact always-on-top mini player
-- Token-protected phone controller with current-song download over the local network
-- Declarative theme and discovery plugins
-- Linux-first, with a Windows-capable Tauri path
+![Yolite home screen with fictional demo content](docs/screenshots/home.webp)
+
+## Highlights
+
+- Native Tauri desktop shell with a Rust backend
+- Personalized Home, Library, Discover, History, and playlist views
+- Cookie-backed YouTube Music sessions with browser and in-app import paths
+- Native playback through `mpv` and stream resolution through `yt-dlp`
+- Queue controls, seeking, volume, loop modes, crossfade, and a six-band equalizer
+- WebGL visualizer driven by real audio telemetry
+- Configurable visualizer frame rate and bass, mids, and highs colors
+- Global hotkeys, compact always-on-top player, Discord presence, and phone controls
+- Declarative local plugins for themes and discovery categories
+- Browser prototype for quick interface development and end-to-end tests
+
+## Screenshots
+
+Screenshots use a fictional account, generated artwork, and placeholder playlists. No real account or listening data is included.
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/library.webp" alt="Yolite personalized library with fictional playlists">
+      <br><strong>Personalized library</strong>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/settings.webp" alt="Yolite playback, equalizer, and visualizer settings">
+      <br><strong>Playback and visualizer controls</strong>
+    </td>
+  </tr>
+</table>
 
 ## Requirements
 
+### Desktop development
+
 - Node.js 22+
-- Python 3.9+ for `youtube-dl-exec` install/update support
+- npm
+- Stable Rust toolchain
+- Tauri 2 system dependencies for your platform
+- `mpv` for native playback
+- Python 3.9+ for `youtube-dl-exec` installation and update support
 
-The `youtube-dl-exec` package installs a small `yt-dlp` binary under `node_modules/youtube-dl-exec/bin`.
+`npm install` downloads a project-local `yt-dlp` binary through `youtube-dl-exec`. Yolite also checks common system locations for `yt-dlp`.
 
-## Run
+Linux is the primary desktop target. Current native playback controls use Unix `mpv` IPC.
 
-### Desktop App
+### Browser prototype
+
+The browser prototype needs Node.js 22+ and npm. It uses the Node backend instead of the Tauri command layer.
+
+## Quick start
+
+### Desktop app
 
 ```bash
 npm install
 npm run desktop:dev
 ```
 
-That launches the Tauri desktop app. On Linux it uses WebKitGTK, not Firefox, Chromium, or Electron.
-
-Wayland is the default target. The launcher disables WebKitGTK's DMA-BUF renderer on Wayland because that path can crash on some GPU drivers while opening the window.
-
-Build a native package with:
+Build native packages with:
 
 ```bash
 npm run desktop:build
 ```
 
-### Local Browser Prototype
+### Browser prototype
 
 ```bash
 npm install
 npm start
 ```
 
-Then open the printed local URL.
+Open the local URL printed by the server.
 
-## Project structure
+## Account sessions
 
-The desktop backend is split by ownership so changes stay focused and reviewable:
+Yolite can run without an account for public search and playback. Importing a session enables personalized Home and Library content.
 
-- `src-tauri/src/lib.rs` composes the Tauri application and registers commands.
-- `src-tauri/src/models.rs` contains shared command payloads and application state.
-- `src-tauri/src/config.rs` owns local configuration and cookie normalization.
-- `src-tauri/src/youtube.rs` owns YouTube Music requests, parsing, and account commands.
-- `src-tauri/src/playback.rs` owns `mpv`, `yt-dlp`, equalizer, and visualizer telemetry.
-- `src-tauri/src/servers.rs` owns loopback streaming and the phone controller server.
-- `src-tauri/src/desktop.rs`, `discord.rs`, `plugins.rs`, and `remote.rs` contain their named integrations.
-- `public/app.js` coordinates the interface. `public/visualizer.js` contains the WebGL renderer.
+Recommended flow:
 
-Keep new code in the module that owns its state or external boundary. Add shared command payloads to `models.rs`; keep `lib.rs` limited to application composition.
+1. Sign in to YouTube Music in your normal browser.
+2. Open Yolite Settings.
+3. Select the browser profile under Session.
+4. Choose **Import browser session**.
+5. Refresh Library after Yolite confirms the session.
 
-Run both test suites before opening a pull request:
+The desktop app also provides an in-app login window. Manual cookie headers and Netscape `cookies.txt` exports are supported when automatic import is unavailable.
 
-```bash
-(cd src-tauri && cargo test)
-npm run test:e2e
-```
+If one Google login owns multiple YouTube identities, open `https://www.youtube.com/account_advanced` while using the intended identity. Yolite accepts:
 
-## Account Login
+- Channel ID for public channel playlist discovery
+- Numeric Brand Account ID as the YouTube Music user selector
 
-Open YouTube Music in your normal browser and sign in there first. In Yolite's Session panel, choose that browser and use Import Browser Cookies. The app asks `yt-dlp` to read the browser profile and stores the resulting YouTube cookies locally.
-
-If browser import cannot read your profile, export or copy your YouTube cookie header and paste it manually in the same Session panel. After cookies are saved, the Library tab can load account-backed content such as Liked Music.
-
-In the desktop app, you can also use Open In-App Login from the Session panel. Sign in or switch to the YouTube account you use for music in that window, then choose Use In-App Login to save that webview session.
-
-If one Gmail login owns multiple YouTube accounts, switch to the account you use for music and open `https://www.youtube.com/account_advanced` to confirm the active YouTube account. Use the Channel ID from that page to include public YouTube playlists from that channel. If Yolite still needs an explicit Music account selector, use the numeric Brand Account ID from the `/b/<id>/` URL at `https://myaccount.google.com/brandaccounts`, then save or import the session again.
-
-Accepted formats:
-
-- A normal `Cookie` header: `SID=...; HSID=...; SSID=...`
-- Netscape cookies.txt export lines
-
-Cookies are stored at:
+Session data is stored locally:
 
 ```text
 ~/.config/yolite/config.json
 ```
 
-Set `YOLITE_CONFIG=/path/to/config.json` to use a different config file.
+Set `YOLITE_CONFIG=/path/to/config.json` to use another configuration file. Never commit this file or exported cookies.
 
-## Notes
+## Playback and visualizer
 
-This is intentionally not an Electron app. The desktop path uses Tauri/Wry with the system WebKitGTK webview on Linux.
+Desktop playback runs outside the webview through `mpv`. This avoids binding decoding and audio output to the interface process.
 
-The desktop path uses the MIT-licensed Rust `rs-ytmusic-api` crate for YouTube Music search. The local browser prototype still uses the GPL-3.0 `ytmusic-api` npm package.
+The background visualizer uses:
+
+- FFmpeg audio statistics from the native `mpv` filter chain
+- Web Audio frequency data in browser mode
+- One low-power WebGL draw call per rendered frame
+- Automatic suspension while paused, hidden, or disabled
+- Selectable 15, 30, 60, or 120 FPS limits
+- User-defined bass, mids, and highs colors stored in local settings
+
+Disabling the visualizer also removes native analysis filters, so unused effects do not consume processing time.
 
 ## Plugins and themes
 
-YoLite loads desktop plugins from `~/.config/yolite/plugins`. Each plugin uses its own directory:
+Desktop plugins live under `~/.config/yolite/plugins`. Each plugin has its own directory:
 
 ```text
 plugins/
@@ -114,7 +132,7 @@ plugins/
     theme.css
 ```
 
-`plugin.json`:
+Example `plugin.json`:
 
 ```json
 {
@@ -125,4 +143,54 @@ plugins/
 }
 ```
 
-`theme.css` can override YoLite CSS variables and component styles. Plugins are local and declarative; they do not execute JavaScript. Only install themes from sources you trust because CSS changes the app interface.
+`theme.css` can override Yolite CSS variables and component styles. Plugins are declarative and do not execute JavaScript. CSS still changes the interface, so install plugins only from sources you trust.
+
+## Project structure
+
+The Rust backend is split by ownership so changes stay focused and reviewable:
+
+- `src-tauri/src/lib.rs` composes the Tauri application and registers commands.
+- `src-tauri/src/models.rs` contains shared command payloads and application state.
+- `src-tauri/src/config.rs` owns local configuration and cookie normalization.
+- `src-tauri/src/youtube.rs` owns YouTube Music requests, parsing, and account commands.
+- `src-tauri/src/playback.rs` owns `mpv`, `yt-dlp`, equalizer, and visualizer telemetry.
+- `src-tauri/src/servers.rs` owns loopback streaming and the phone controller server.
+- `src-tauri/src/desktop.rs`, `discord.rs`, `plugins.rs`, and `remote.rs` contain their named integrations.
+- `public/app.js` coordinates the interface.
+- `public/visualizer.js` owns the WebGL renderer.
+- `src/server.js` supports the local browser prototype.
+- `tests/` contains Playwright regression tests.
+
+Put new code in the module that owns its state or external boundary. Keep `lib.rs` limited to application composition.
+
+## Development
+
+Run all current checks before opening a pull request:
+
+```bash
+(cd src-tauri && cargo fmt -- --check)
+(cd src-tauri && cargo test)
+node --check public/app.js
+node --check public/visualizer.js
+npm run test:e2e
+```
+
+Keep commits narrow and independently buildable. Separate structural refactors, behavior changes, and documentation when practical.
+
+## Privacy and security
+
+- Account cookies stay in the local Yolite configuration file.
+- Temporary `yt-dlp` cookie files are removed after use.
+- The phone controller uses a random private token, but it is still reachable on the local network while enabled.
+- Plugin CSS is local and declarative.
+- Yolite does not include its own analytics service.
+
+Treat session cookies and phone-controller QR codes as secrets.
+
+## Known boundaries
+
+YouTube Music uses private, evolving endpoints. Upstream changes can break parsing or playback without notice. Linux receives the most testing. Windows and macOS packaging still need broader contributor testing.
+
+## License
+
+Yolite is available under the [MIT License](LICENSE).
