@@ -348,13 +348,15 @@ mod tests {
     }
 
     #[test]
-    fn test_external_command_clears_appimage_python_env() {
+    fn test_external_command_clears_appimage_runtime_env() {
         let command = external_command(Path::new("yt-dlp"));
         let envs = command
             .get_envs()
             .map(|(key, value)| (key.to_string_lossy().to_string(), value.is_none()))
             .collect::<std::collections::HashMap<_, _>>();
 
+        assert_eq!(envs.get("LD_LIBRARY_PATH"), Some(&true));
+        assert_eq!(envs.get("LD_PRELOAD"), Some(&true));
         assert_eq!(envs.get("PYTHONHOME"), Some(&true));
         assert_eq!(envs.get("PYTHONPATH"), Some(&true));
     }

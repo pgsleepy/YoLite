@@ -137,7 +137,11 @@ pub(crate) fn find_mpv_binary() -> Option<PathBuf> {
 
 pub(crate) fn external_command(program: &Path) -> Command {
     let mut command = Command::new(program);
-    command.env_remove("PYTHONHOME").env_remove("PYTHONPATH");
+    command
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH");
     command
 }
 
@@ -378,20 +382,20 @@ fn mpv_startup_failure(status: Option<std::process::ExitStatus>, error_path: &Pa
     if let Ok(mut file) = fs::File::open(error_path) {
         let _ = file.read_to_string(&mut details);
     }
-    let _ = fs::remove_file(error_path);
     let details = details
         .lines()
         .filter(|line| !line.trim().is_empty())
         .last()
         .unwrap_or_default()
         .trim();
-    if !details.is_empty() {
+    let reason = if !details.is_empty() {
         format!("mpv could not start audio: {details}")
     } else if let Some(status) = status {
         format!("mpv exited before audio started ({status})")
     } else {
         "mpv did not start audio within 8 seconds".to_string()
-    }
+    };
+    format!("{reason} (diagnostic log: {})", error_path.display())
 }
 
 fn wait_for_player_start(
@@ -401,7 +405,9 @@ fn wait_for_player_start(
 ) -> Result<(), String> {
     for _ in 0..80 {
         if let Some(status) = player.try_wait().map_err(|error| error.to_string())? {
-            return Err(mpv_startup_failure(Some(status), error_path));
+            let failure = mpv_startup_failure(Some(status), error_path);
+            eprintln!("Yolite playback error: {failure}");
+            return Err(failure);
         }
         if ipc_path.exists()
             && mpv_ipc_command(ipc_path, json!(["get_property", "audio-params"]))
@@ -418,7 +424,9 @@ fn wait_for_player_start(
     let _ = player.kill();
     let status = player.wait().ok();
     let _ = fs::remove_file(ipc_path);
-    Err(mpv_startup_failure(status, error_path))
+    let failure = mpv_startup_failure(status, error_path);
+    eprintln!("Yolite playback error: {failure}");
+    Err(failure)
 }
 
 #[tauri::command]
