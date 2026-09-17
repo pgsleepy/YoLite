@@ -228,6 +228,40 @@ test("settings owns session and performance controls", async ({ page }) => {
   await expect(page.locator("#visualizerEnabled")).toBeChecked();
   await expect(page.locator("#visualizer")).toHaveAttribute("data-renderer", "webgl");
   await expect(page.locator('[data-hotkey="playPause"]')).toHaveValue("Ctrl+Alt+Space");
+  await expect(page.getByRole("heading", { name: "Updates" })).toBeVisible();
+  await expect(page.locator("#updateVersion")).toHaveText("Desktop only");
+});
+
+test("desktop update controls expose signed release updates", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__updateCommands = [];
+    window.__TAURI__ = {
+      core: {
+        invoke: async (command) => {
+          window.__updateCommands.push(command);
+          if (command === "check_for_update") {
+            return {
+              available: true,
+              currentVersion: "0.1.0",
+              version: "0.2.0",
+              notes: "Performance improvements",
+              managedExternally: false,
+            };
+          }
+          return {};
+        },
+      },
+    };
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.locator("#checkForUpdate").click();
+
+  await expect(page.locator("#updateVersion")).toHaveText("v0.1.0");
+  await expect(page.locator("#updateState")).toContainText("0.2.0");
+  await expect(page.locator("#installUpdate")).toBeVisible();
+  await page.locator("#installUpdate").click();
+  await expect.poll(() => page.evaluate(() => window.__updateCommands)).toContain("install_update");
 });
 
 test("visualizer frame rate and colors persist", async ({ page }) => {

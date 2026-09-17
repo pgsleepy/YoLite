@@ -101,6 +101,12 @@ const pluginList = document.querySelector("#pluginList");
 const resetHotkeys = document.querySelector("#resetHotkeys");
 const hotkeyState = document.querySelector("#hotkeyState");
 const hotkeyInputs = [...document.querySelectorAll("[data-hotkey]")];
+const automaticUpdateChecks = document.querySelector("#automaticUpdateChecks");
+const updateVersion = document.querySelector("#updateVersion");
+const updateState = document.querySelector("#updateState");
+const updateNotes = document.querySelector("#updateNotes");
+const checkForUpdateButton = document.querySelector("#checkForUpdate");
+const installUpdateButton = document.querySelector("#installUpdate");
 const isTauri = Boolean(window.__TAURI__?.core?.invoke);
 
 let results = [];
@@ -194,6 +200,56 @@ function errorMessage(error, fallback = "Unexpected error") {
   if (error?.message) return error.message;
   if (typeof error === "string" && error.trim()) return error;
   return fallback;
+}
+
+function renderUpdateStatus(status) {
+  updateVersion.textContent = `v${status.currentVersion}`;
+  updateNotes.textContent = status.notes || "";
+  updateNotes.hidden = !status.notes;
+  installUpdateButton.hidden = !status.available || status.managedExternally;
+  if (status.managedExternally) {
+    updateState.textContent = "Managed by pacman. Update with paru/yay or your preferred AUR helper.";
+    checkForUpdateButton.hidden = true;
+  } else if (status.available) {
+    updateState.textContent = `Yolite ${status.version} is ready to install.`;
+  } else {
+    updateState.textContent = "Yolite is up to date.";
+  }
+}
+
+async function checkForUpdates({ quiet = false } = {}) {
+  if (!isTauri) {
+    updateVersion.textContent = "Desktop only";
+    updateState.textContent = "Install a desktop build to receive signed updates from GitHub Releases.";
+    checkForUpdateButton.disabled = true;
+    automaticUpdateChecks.disabled = true;
+    return;
+  }
+
+  checkForUpdateButton.disabled = true;
+  if (!quiet) updateState.textContent = "Checking GitHub Releases…";
+  try {
+    const status = await window.__TAURI__.core.invoke("check_for_update");
+    renderUpdateStatus(status);
+  } catch (error) {
+    updateState.textContent = errorMessage(error, "Could not check for updates");
+  } finally {
+    checkForUpdateButton.disabled = false;
+  }
+}
+
+async function installAvailableUpdate() {
+  installUpdateButton.disabled = true;
+  checkForUpdateButton.disabled = true;
+  updateState.textContent = "Downloading and verifying update…";
+  try {
+    await window.__TAURI__.core.invoke("install_update");
+    updateState.textContent = "Update installed. Restarting Yolite…";
+  } catch (error) {
+    updateState.textContent = errorMessage(error, "Could not install update");
+    installUpdateButton.disabled = false;
+    checkForUpdateButton.disabled = false;
+  }
 }
 
 function sessionMessage(payload) {
@@ -2034,6 +2090,12 @@ visualizerFps.addEventListener("change", () => applyVisualizerSettings(visualize
   input.addEventListener("input", () => applyVisualizerSettings(visualizerSettings()));
 });
 resetVisualizer.addEventListener("click", () => applyVisualizerSettings(defaultVisualizerSettings));
+automaticUpdateChecks.addEventListener("change", () => {
+  localStorage.setItem("yolite:automaticUpdateChecks", JSON.stringify(automaticUpdateChecks.checked));
+  settingsState.textContent = "Saved locally";
+});
+checkForUpdateButton.addEventListener("click", () => checkForUpdates());
+installUpdateButton.addEventListener("click", installAvailableUpdate);
 document.addEventListener("visibilitychange", syncVisualizerAnimation);
 hotkeyInputs.forEach(input => input.addEventListener("change", registerHotkeys));
 resetHotkeys.addEventListener("click", () => {
@@ -2316,6 +2378,7 @@ discoverFromHistory.checked = storedJson("yolite:discoverFromHistory", true);
 discordPresence.checked = storedJson("yolite:discordPresence", true);
 volumeNormalization.checked = storedJson("yolite:volumeNormalization", false);
 visualizerEnabled.checked = storedJson("yolite:visualizer", true);
+automaticUpdateChecks.checked = storedJson("yolite:automaticUpdateChecks", true);
 visualizer.hidden = !visualizerEnabled.checked;
 applyVisualizerSettings(storedJson("yolite:visualizerSettings", defaultVisualizerSettings), false);
 loopMode = ["off", "all", "one"].includes(localStorage.getItem("yolite:loopMode"))
@@ -2373,6 +2436,8 @@ syncPlayButton();
 registerHotkeys();
 loadPlugins();
 setTimeout(hideSplash, 1400);
+if (isTauri && automaticUpdateChecks.checked) setTimeout(() => checkForUpdates({ quiet: true }), 2500);
+if (!isTauri) checkForUpdates({ quiet: true });
 if (!isTauri) {
   appLoginActions.hidden = true;
   appLoginHelp.hidden = true;

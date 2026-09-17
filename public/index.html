@@ -269,6 +269,22 @@
               <p class="help-text">Install declarative plugins in <code>~/.config/yolite/plugins</code>. Plugins can add themes and Discover categories.</p>
             </section>
             <section class="settings-section">
+              <div class="settings-heading">
+                <h2>Updates</h2>
+                <span id="updateVersion" class="status">Checking version</span>
+              </div>
+              <label class="setting-check">
+                <input id="automaticUpdateChecks" type="checkbox" checked>
+                <span>Check automatically</span>
+              </label>
+              <p id="updateState" class="help-text" role="status" aria-live="polite">Desktop builds check GitHub Releases.</p>
+              <p id="updateNotes" class="help-text update-notes" hidden></p>
+              <div class="row-actions">
+                <button id="checkForUpdate" class="ghost" type="button">Check now</button>
+                <button id="installUpdate" type="button" hidden>Install and restart</button>
+              </div>
+            </section>
+            <section class="settings-section">
               <h2>Recommendations</h2>
               <label class="setting-row">
                 <span>Mix length</span>

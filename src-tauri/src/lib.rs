@@ -6,6 +6,7 @@ mod playback;
 mod plugins;
 mod remote;
 mod servers;
+mod updater;
 mod youtube;
 
 use std::sync::Arc;
@@ -20,6 +21,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .setup(move |app| {
             match servers::start_stream_server(app.handle().clone()) {
@@ -80,7 +82,9 @@ pub fn run() {
             desktop::set_mini_player,
             plugins::load_plugins,
             remote::update_remote_state,
-            remote::get_remote_controller
+            remote::get_remote_controller,
+            updater::check_for_update,
+            updater::install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yolite");

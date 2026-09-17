@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["deb", "rpm"],
     "icon": [
       "icons/icon.png",
@@ -36,6 +37,14 @@
     ],
     "resources": {
       "../node_modules/youtube-dl-exec/bin/yt-dlp": "bin/yt-dlp"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/pgsleepy/YoLite/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc4RTlBQzNDQkNCNTk5MDAKUldRQW1iVzhQS3pwZU5QQVloMEJ6bHVoRDdRcTNZNHA1UTJQVllqV1k1OVZocnVLRW9kWGZ3U1IK"
     }
   }
 }
