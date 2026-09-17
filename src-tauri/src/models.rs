@@ -154,6 +154,16 @@ pub(crate) struct PlaybackPayload {
     pub(crate) duration: f64,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VisualizerPayload {
+    pub(crate) bass: f64,
+    pub(crate) mids: f64,
+    pub(crate) treble: f64,
+    pub(crate) energy: f64,
+    pub(crate) peak: f64,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EqualizerPayload {
@@ -171,6 +181,12 @@ pub(crate) struct EqualizerPayload {
     pub(crate) treble: f64,
     #[serde(default)]
     pub(crate) normalization: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PlaybackAudioSettings {
+    pub(crate) equalizer: EqualizerPayload,
+    pub(crate) visualizer_enabled: bool,
 }
 
 impl EqualizerPayload {
@@ -229,6 +245,7 @@ pub(crate) struct AppState {
     pub(crate) stream_base_url: std::sync::Mutex<Option<String>>,
     pub(crate) stream_cache: std::sync::Mutex<std::collections::HashMap<String, CachedStream>>,
     pub(crate) playback: std::sync::Mutex<Option<NativePlayback>>,
+    pub(crate) playback_audio: std::sync::Mutex<PlaybackAudioSettings>,
     pub(crate) discord: std::sync::Mutex<Option<DiscordIpcClient>>,
     pub(crate) remote_state: std::sync::Mutex<RemotePlaybackState>,
     pub(crate) controller_url: std::sync::Mutex<Option<String>>,

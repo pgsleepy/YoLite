@@ -15,6 +15,8 @@ use std::os::unix::net::UnixStream;
 
 use crate::{config::*, models::*, youtube::valid_video_id};
 
+const NATIVE_VISUALIZER_FILTER: &str = "@yolite_visualizer:lavfi=[astats=metadata=1:reset=1:length=0.05:measure_overall=RMS_level+Peak_level:measure_perchannel=none,aspectralstats=win_size=1024:overlap=0.5:measure=centroid+flux+rolloff]";
+
 pub(crate) fn is_executable(path: &Path) -> bool {
     if !path.is_file() {
         return false;
@@ -206,6 +208,7 @@ pub(crate) fn player_args(
     url: &str,
     ytdlp: &Path,
     equalizer: &EqualizerPayload,
+    visualizer_enabled: bool,
 ) -> Vec<String> {
     let volume = volume.clamp(0.0, 1.0) * 100.0;
     let title = if title.trim().is_empty() {
@@ -227,10 +230,25 @@ pub(crate) fn player_args(
         format!("--force-media-title={title}"),
         url.to_string(),
     ];
-    if let Some(filter) = equalizer.mpv_filter() {
-        args.insert(args.len() - 1, format!("--af={filter}"));
+    let filters = native_audio_filters(equalizer, visualizer_enabled);
+    if !filters.is_empty() {
+        args.insert(args.len() - 1, format!("--af={filters}"));
     }
     args
+}
+
+pub(crate) fn native_audio_filters(
+    equalizer: &EqualizerPayload,
+    visualizer_enabled: bool,
+) -> String {
+    let mut filters = Vec::with_capacity(2);
+    if let Some(equalizer) = equalizer.mpv_filter() {
+        filters.push(equalizer);
+    }
+    if visualizer_enabled {
+        filters.push(NATIVE_VISUALIZER_FILTER.to_string());
+    }
+    filters.join(",")
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -308,6 +326,7 @@ pub(crate) fn spawn_native_playback(
     url: &str,
     volume: f64,
     equalizer: &EqualizerPayload,
+    visualizer_enabled: bool,
     title: &str,
     artist: &str,
 ) -> Result<NativePlayback, String> {
@@ -334,6 +353,7 @@ pub(crate) fn spawn_native_playback(
             url,
             &ytdlp,
             equalizer,
+            visualizer_enabled,
         ))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -353,12 +373,22 @@ pub(crate) fn play_track_native(
     volume: f64,
     fade_in: f64,
     equalizer: EqualizerPayload,
+    visualizer_enabled: bool,
     title: String,
     artist: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     if !valid_video_id(&video_id) {
         return Err("Invalid video id".to_string());
+    }
+
+    {
+        let mut audio = state
+            .playback_audio
+            .lock()
+            .map_err(|_| "Could not lock playback audio settings".to_string())?;
+        audio.equalizer = equalizer.clone();
+        audio.visualizer_enabled = visualizer_enabled;
     }
 
     let playback_url = native_playback_url(&state, &video_id, || {
@@ -381,6 +411,7 @@ pub(crate) fn play_track_native(
         &playback_url,
         playback_volume,
         &equalizer,
+        visualizer_enabled,
         &title,
         &artist,
     )?;
@@ -474,6 +505,35 @@ pub(crate) fn mpv_property_bool(ipc_path: &Path, property: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn metadata_number(metadata: &Value, key: &str) -> f64 {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(0.0)
+}
+
+fn normalized_db(value: f64) -> f64 {
+    ((value + 55.0) / 45.0).clamp(0.0, 1.0).powf(1.25)
+}
+
+pub(crate) fn visualizer_payload(metadata: &Value) -> VisualizerPayload {
+    let energy = normalized_db(metadata_number(metadata, "lavfi.astats.Overall.RMS_level"));
+    let peak = normalized_db(metadata_number(metadata, "lavfi.astats.Overall.Peak_level"));
+    let centroid =
+        (metadata_number(metadata, "lavfi.aspectralstats.1.centroid") / 12_000.0).clamp(0.0, 1.0);
+    let flux = (metadata_number(metadata, "lavfi.aspectralstats.1.flux") * 12.0).clamp(0.0, 1.0);
+
+    VisualizerPayload {
+        bass: (energy * (1.15 - centroid * 0.65) + peak * 0.12).clamp(0.0, 1.0),
+        mids: (energy * (0.8 + flux * 0.45)).clamp(0.0, 1.0),
+        treble: (energy * (0.35 + centroid * 0.9) + flux * 0.2).clamp(0.0, 1.0),
+        energy,
+        peak,
+    }
+}
+
 #[tauri::command]
 pub(crate) fn get_native_playback(
     state: tauri::State<'_, Arc<AppState>>,
@@ -496,6 +556,23 @@ pub(crate) fn get_native_playback(
 }
 
 #[tauri::command]
+pub(crate) fn get_native_visualizer(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<VisualizerPayload, String> {
+    let Some(ipc_path) = playback_ipc_path(&state)? else {
+        return Ok(VisualizerPayload::default());
+    };
+    let payload = mpv_ipc_command(
+        &ipc_path,
+        json!(["get_property", "af-metadata/yolite_visualizer"]),
+    )?;
+    Ok(payload
+        .get("data")
+        .map(visualizer_payload)
+        .unwrap_or_default())
+}
+
+#[tauri::command]
 pub(crate) fn set_native_volume(
     volume: f64,
     state: tauri::State<'_, Arc<AppState>>,
@@ -512,18 +589,37 @@ pub(crate) fn set_native_equalizer(
     equalizer: EqualizerPayload,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    let filters = {
+        let mut audio = state
+            .playback_audio
+            .lock()
+            .map_err(|_| "Could not lock playback audio settings".to_string())?;
+        audio.equalizer = equalizer;
+        native_audio_filters(&audio.equalizer, audio.visualizer_enabled)
+    };
     let Some(ipc_path) = playback_ipc_path(&state)? else {
         return Ok(());
     };
-    mpv_ipc_command(
-        &ipc_path,
-        json!([
-            "set_property_string",
-            "af",
-            equalizer.mpv_filter().unwrap_or_default()
-        ]),
-    )
-    .map(|_| ())
+    mpv_ipc_command(&ipc_path, json!(["set_property_string", "af", filters])).map(|_| ())
+}
+
+#[tauri::command]
+pub(crate) fn set_native_visualizer(
+    enabled: bool,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let filters = {
+        let mut audio = state
+            .playback_audio
+            .lock()
+            .map_err(|_| "Could not lock playback audio settings".to_string())?;
+        audio.visualizer_enabled = enabled;
+        native_audio_filters(&audio.equalizer, audio.visualizer_enabled)
+    };
+    let Some(ipc_path) = playback_ipc_path(&state)? else {
+        return Ok(());
+    };
+    mpv_ipc_command(&ipc_path, json!(["set_property_string", "af", filters])).map(|_| ())
 }
 
 #[tauri::command]

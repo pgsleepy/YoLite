@@ -58,8 +58,10 @@ pub fn run() {
             playback::play_track_native,
             playback::stop_native_playback,
             playback::get_native_playback,
+            playback::get_native_visualizer,
             playback::set_native_volume,
             playback::set_native_equalizer,
+            playback::set_native_visualizer,
             playback::set_native_pause,
             playback::seek_native_playback,
             youtube::search_tracks,
@@ -255,6 +257,31 @@ mod tests {
             ..EqualizerPayload::default()
         };
         assert!(normalized.mpv_filter().unwrap().contains("dynaudnorm"));
+    }
+
+    #[test]
+    fn test_native_visualizer_filter_only_runs_when_enabled() {
+        let disabled = native_audio_filters(&EqualizerPayload::default(), false);
+        let enabled = native_audio_filters(&EqualizerPayload::default(), true);
+
+        assert!(disabled.is_empty());
+        assert!(enabled.contains("@yolite_visualizer"));
+        assert!(enabled.contains("aspectralstats"));
+    }
+
+    #[test]
+    fn test_native_visualizer_uses_audio_metadata() {
+        let payload = visualizer_payload(&json!({
+            "lavfi.astats.Overall.RMS_level": "-18.0",
+            "lavfi.astats.Overall.Peak_level": "-8.0",
+            "lavfi.aspectralstats.1.centroid": "2400.0",
+            "lavfi.aspectralstats.1.flux": "0.03"
+        }));
+
+        assert!(payload.energy > 0.5);
+        assert!(payload.peak > payload.energy);
+        assert!(payload.bass > payload.treble);
+        assert!(payload.mids > 0.5);
     }
 
     #[test]
