@@ -78,7 +78,6 @@ mv -f "${appimage_path}.new" "$appimage_path"
 install -m 644 "$icon_download" "$icon_path"
 
 escaped_appimage_path="$(desktop_escape "$appimage_path")"
-escaped_icon_path="$(desktop_escape "$icon_path")"
 launcher_temporary="${temporary_directory}/yolite"
 {
   printf '%s\n' '#!/bin/sh'
@@ -92,7 +91,7 @@ desktop_temporary="${temporary_directory}/dev.yolite.client.desktop"
   printf '%s\n' 'Name=Yolite'
   printf '%s\n' 'Comment=Lightweight YouTube Music client'
   printf 'Exec="%s"\n' "$escaped_appimage_path"
-  printf 'Icon=%s\n' "$escaped_icon_path"
+  printf '%s\n' 'Icon=yolite'
   printf '%s\n' 'Terminal=false'
   printf '%s\n' 'Type=Application'
   printf '%s\n' 'Categories=AudioVideo;Audio;Player;'
@@ -102,6 +101,14 @@ install -m 644 "$desktop_temporary" "$desktop_path"
 
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$(dirname "$desktop_path")" >/dev/null 2>&1 || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache --force --ignore-theme-index "${data_home}/icons/hicolor" >/dev/null 2>&1 || true
+fi
+if command -v kbuildsycoca6 >/dev/null 2>&1; then
+  kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
+elif command -v kbuildsycoca5 >/dev/null 2>&1; then
+  kbuildsycoca5 --noincremental >/dev/null 2>&1 || true
 fi
 
 printf '\nYolite installed successfully.\n'
